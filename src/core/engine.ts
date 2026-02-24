@@ -1,0 +1,276 @@
+import { v4 as uuidv4 } from 'uuid';
+import { FrameworkConfig, Message, IncomingMessage, Session } from './types';
+import { ContextManager } from './context';
+import { HybridMemoryManager, Mem0Config } from './memory';
+import { LLMProvider, createLLMProvider } from '../llm';
+import { PlatformAdapter } from '../adapters/base';
+import { Plugin, PluginManager } from '../plugins';
+
+/**
+ * 聊天机器人引擎
+ * 
+ * 核心功能：
+ * - 多平台消息路由
+ * - 无限上下文（Mem0 + 滑动窗口）
+ * - 多用户会话隔离
+ * - 插件系统
+ */
+export class ChatBotEngine {
+  private config: FrameworkConfig;
+  private adapters: Map<string, PlatformAdapter> = new Map();
+  private llmProvider!: LLMProvider;
+  private contextManager: ContextManager;
+  private memoryManager: HybridMemoryManager;
+  private pluginManager: PluginManager;
+  private sessions: Map<string, Session> = new Map();
+  private isRunning = false;
+
+  constructor(config: FrameworkConfig) {
+    this.config = config;
+    this.contextManager = new ContextManager(config.memory);
+    
+    // 初始化 Mem0 记忆管理器
+    const mem0Config: Mem0Config = {
+      apiKey: process.env.MEM0_API_KEY,
+      localMode: !process.env.MEM0_API_KEY,
+    };
+    this.memoryManager = new HybridMemoryManager(mem0Config, config.memory.shortTermWindow);
+    
+    // 初始化插件管理器
+    this.pluginManager = new PluginManager();
+  }
+
+  /**
+   * 初始化引擎
+   */
+  async init(): Promise<void> {
+    // 初始化 LLM
+    this.llmProvider = createLLMProvider(this.config.llm);
+    console.log(`[Engine] LLM initialized: ${this.config.llm.provider}/${this.config.llm.model}`);
+
+    // 加载插件
+    if (this.config.plugins?.enabled) {
+      await this.pluginManager.loadPlugins(this.config.plugins.enabled);
+      console.log(`[Engine] Loaded ${this.pluginManager.getPlugins().length} plugins`);
+    }
+  }
+
+  /**
+   * 注册平台适配器
+   */
+  registerAdapter(adapter: PlatformAdapter): void {
+    this.adapters.set(adapter.name, adapter);
+    console.log(`[Engine] Adapter registered: ${adapter.name}`);
+  }
+
+  /**
+   * 注册插件
+   */
+  registerPlugin(plugin: Plugin): void {
+    this.pluginManager.registerPlugin(plugin);
+    console.log(`[Engine] Plugin registered: ${plugin.name}`);
+  }
+
+  /**
+   * 启动引擎
+   */
+  async start(): Promise<void> {
+    if (this.isRunning) {
+      console.warn('[Engine] Already running');
+      return;
+    }
+
+    await this.init();
+
+    // 启动所有适配器
+    for (const [name, adapter] of this.adapters) {
+      try {
+        // 注册消息处理器
+        adapter.onMessage(this.handleIncomingMessage.bind(this));
+        await adapter.start();
+        console.log(`[Engine] Adapter started: ${name}`);
+      } catch (e) {
+        console.error(`[Engine] Failed to start adapter ${name}:`, e);
+      }
+    }
+
+    this.isRunning = true;
+    console.log('[Engine] Started');
+  }
+
+  /**
+   * 停止引擎
+   */
+  async stop(): Promise<void> {
+    for (const [name, adapter] of this.adapters) {
+      try {
+        await adapter.stop();
+        console.log(`[Engine] Adapter stopped: ${name}`);
+      } catch (e) {
+        console.error(`[Engine] Failed to stop adapter ${name}:`, e);
+      }
+    }
+    this.isRunning = false;
+    console.log('[Engine] Stopped');
+  }
+
+  /**
+   * 处理入站消息
+   */
+  private async handleIncomingMessage(incoming: IncomingMessage): Promise<void> {
+    const { sessionId, content, sender } = incoming;
+
+    console.log(`[Engine] Message from ${sessionId}: ${content.slice(0, 50)}...`);
+
+    try {
+      // 获取或创建会话
+      const session = this.getOrCreateSession(sessionId, incoming);
+
+      // 检查是否是插件命令
+      const pluginResult = await this.pluginManager.processMessage(content, session);
+      if (pluginResult) {
+        // 插件处理了消息
+        const adapter = this.adapters.get(session.platform);
+        if (adapter) {
+          await adapter.sendMessage(sessionId, pluginResult);
+        }
+        return;
+      }
+
+      // 添加用户消息到上下文
+      await this.contextManager.addMessage(sessionId, {
+        sessionId,
+        role: 'user',
+        content,
+        metadata: { sender },
+      });
+
+      // 获取上下文
+      const messages = await this.contextManager.getContext(sessionId);
+
+      // 使用 Mem0 构建增强上下文
+      const { systemPrompt, relevantMemories } = await this.memoryManager.buildContext(
+        messages,
+        session.userId,
+        content
+      );
+
+      // 调用 LLM
+      const response = await this.llmProvider.chat(messages, {
+        systemPrompt,
+        temperature: this.config.llm.temperature,
+        maxTokens: this.config.llm.maxTokens,
+      });
+
+      // 添加助手消息到上下文
+      await this.contextManager.addMessage(sessionId, {
+        sessionId,
+        role: 'assistant',
+        content: response,
+      });
+
+      // 发送回复
+      const adapter = this.adapters.get(session.platform);
+      if (adapter) {
+        await adapter.sendMessage(sessionId, response);
+      }
+
+      console.log(`[Engine] Response sent to ${sessionId}`);
+    } catch (e) {
+      console.error(`[Engine] Error processing message:`, e);
+      
+      // 发送错误消息
+      const adapter = this.adapters.get(sessionId.split(':')[0]);
+      if (adapter) {
+        await adapter.sendMessage(sessionId, '抱歉，处理消息时出错。请稍后重试。');
+      }
+    }
+  }
+
+  /**
+   * 获取或创建会话
+   */
+  private getOrCreateSession(sessionId: string, incoming: IncomingMessage): Session {
+    if (this.sessions.has(sessionId)) {
+      const session = this.sessions.get(sessionId)!;
+      session.lastActiveAt = Date.now();
+      return session;
+    }
+
+    const [platform, ...rest] = sessionId.split(':');
+    const session: Session = {
+      id: sessionId,
+      platform,
+      userId: rest[rest.length - 1] || 'unknown',
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+      metadata: incoming.metadata,
+    };
+
+    // 检查是否是群组
+    if (rest[0] === 'group') {
+      session.groupId = rest[1];
+    }
+
+    this.sessions.set(sessionId, session);
+    return session;
+  }
+
+  /**
+   * 获取会话统计
+   */
+  getSessionStats(sessionId: string): any {
+    const session = this.sessions.get(sessionId);
+    const contextStats = this.contextManager.getStats(sessionId);
+    
+    return {
+      session,
+      context: contextStats,
+    };
+  }
+
+  /**
+   * 清除会话
+   */
+  clearSession(sessionId: string): void {
+    this.sessions.delete(sessionId);
+    this.contextManager.clearContext(sessionId);
+    console.log(`[Engine] Session cleared: ${sessionId}`);
+  }
+
+  /**
+   * 手动发送消息（用于主动推送）
+   */
+  async sendMessage(sessionId: string, message: string): Promise<void> {
+    const [platform] = sessionId.split(':');
+    const adapter = this.adapters.get(platform);
+    
+    if (!adapter) {
+      throw new Error(`Adapter not found: ${platform}`);
+    }
+
+    await adapter.sendMessage(sessionId, message);
+  }
+
+  /**
+   * 获取引擎状态
+   */
+  getStatus(): {
+    isRunning: boolean;
+    adapters: string[];
+    sessions: number;
+    plugins: number;
+  } {
+    return {
+      isRunning: this.isRunning,
+      adapters: Array.from(this.adapters.keys()),
+      sessions: this.sessions.size,
+      plugins: this.pluginManager.getPlugins().length,
+    };
+  }
+}
+
+// 导出
+export { FrameworkConfig, Message, IncomingMessage, Session };
+export { ContextManager } from './context';
+export { HybridMemoryManager } from './memory';

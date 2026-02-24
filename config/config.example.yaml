@@ -1,0 +1,68 @@
+# 聊天机器人框架配置示例
+# 复制此文件为 config.yaml 并修改
+
+# LLM 配置
+llm:
+  # 提供者: openai | anthropic | local | siliconflow | openai-compatible
+  provider: siliconflow
+  
+  # 模型名称
+  model: deepseek-ai/DeepSeek-V3
+  
+  # API Key（必填）
+  apiKey: your-api-key-here
+  
+  # 自定义 API 地址（可选）
+  # baseUrl: https://api.siliconflow.cn/v1
+  
+  # 生成参数
+  maxTokens: 4096
+  temperature: 0.7
+
+# 记忆配置
+memory:
+  # 短期记忆窗口大小（消息数）
+  shortTermWindow: 20
+  
+  # 向量数据库配置（可选）
+  vectorDb:
+    type: memory  # memory | chromadb
+    # url: http://localhost:8000
+    # collection: chatbot-memory
+  
+  # 压缩阈值（消息数超过此值时触发摘要压缩）
+  compressThreshold: 50
+
+# 平台适配器配置
+adapters:
+  # Telegram 机器人
+  - type: telegram
+    enabled: false
+    config:
+      token: "your-telegram-bot-token"
+  
+  # Discord 机器人
+  - type: discord
+    enabled: false
+    config:
+      token: "your-discord-bot-token"
+  
+  # 飞书机器人
+  - type: feishu
+    enabled: false
+    config:
+      appId: "your-app-id"
+      appSecret: "your-app-secret"
+
+# 插件配置（可选）
+plugins:
+  enabled: []
+  # enabled:
+  #   - weather
+  #   - translator
+  directory: ./plugins
+
+# 日志配置
+logging:
+  level: info  # debug | info | warn | error
+  # file: logs/bot.log
