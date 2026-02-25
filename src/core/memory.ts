@@ -3,14 +3,14 @@ import { Message } from './types';
 /**
  * Mem0 记忆层集成
  * 
- * 官方 SDK: https://github.com/mem0ai/mem0
- * 文档: https://docs.mem0.ai
+ * 支持本地模式和 Mem0 API（可选）
  */
+
 export interface Mem0Config {
   apiKey?: string;           // Mem0 API Key（托管服务）
   organizationId?: string;   // 组织 ID
   projectId?: string;        // 项目 ID
-  localMode?: boolean;       // 本地模式（不使用托管服务）
+  localMode?: boolean;       // 本地模式（默认 true）
 }
 
 export interface Memory {
@@ -18,15 +18,15 @@ export interface Memory {
   content: string;
   userId: string;
   metadata?: Record<string, any>;
-  score?: number;  // 检索相关性分数
+  score?: number;
   createdAt: number;
   updatedAt: number;
 }
 
 /**
- * Mem0 记忆管理器
+ * 记忆管理器
  * 
- * 提供自动化的记忆提取、存储和检索
+ * 默认使用本地存储，可选支持 Mem0 API
  */
 export class Mem0Manager {
   private config: Mem0Config;
@@ -34,59 +34,59 @@ export class Mem0Manager {
   private localStore: Map<string, Memory[]> = new Map();
 
   constructor(config: Mem0Config) {
-    this.config = config;
-    if (!config.localMode && config.apiKey) {
+    this.config = { localMode: true, ...config };
+    
+    // 只有明确提供 API Key 且不是本地模式时才尝试初始化客户端
+    if (!this.config.localMode && config.apiKey) {
       this.initClient();
     }
   }
 
   private async initClient(): Promise<void> {
     try {
-      // 动态加载 mem0ai SDK
-      const { Mem0 } = await import('mem0ai');
-      this.client = new Mem0({
-        apiKey: this.config.apiKey,
-        organizationId: this.config.organizationId,
-        projectId: this.config.projectId,
-      });
-      console.log('[Mem0] Client initialized');
+      // 动态加载 mem0ai SDK（可选依赖）
+      // 使用 Function 构造函数绕过 TypeScript 静态检查
+      const dynamicImport = new Function('module', 'return import(module)');
+      const mem0Module = await dynamicImport('mem0ai').catch(() => null);
+      if (mem0Module && mem0Module.Mem0) {
+        this.client = new mem0Module.Mem0({
+          apiKey: this.config.apiKey,
+          organizationId: this.config.organizationId,
+          projectId: this.config.projectId,
+        });
+        console.log('[Mem0] Client initialized');
+      } else {
+        console.warn('[Mem0] SDK not found, using local mode');
+        this.config.localMode = true;
+      }
     } catch (e) {
-      console.warn('[Mem0] SDK not found, falling back to local mode');
+      console.warn('[Mem0] SDK load failed, using local mode');
       this.config.localMode = true;
     }
   }
 
   /**
    * 添加记忆
-   * Mem0 会自动从对话中提取重要信息
    */
   async addMemory(
     messages: Message[],
     userId: string,
     metadata?: Record<string, any>
   ): Promise<void> {
-    if (this.config.localMode) {
+    if (this.config.localMode || !this.client) {
       return this.addMemoryLocal(messages, userId, metadata);
     }
 
     try {
-      // 使用 Mem0 API
       await this.client.add(
         messages.map(m => ({
           role: m.role,
           content: m.content,
         })),
-        {
-          userId,
-          metadata: {
-            sessionId: messages[0]?.sessionId,
-            ...metadata,
-          },
-        }
+        { userId, metadata }
       );
     } catch (e) {
-      console.error('[Mem0] Add memory error:', e);
-      // Fallback to local
+      console.error('[Mem0] Add error:', e);
       return this.addMemoryLocal(messages, userId, metadata);
     }
   }
@@ -99,16 +99,12 @@ export class Mem0Manager {
     userId: string,
     limit: number = 10
   ): Promise<Memory[]> {
-    if (this.config.localMode) {
+    if (this.config.localMode || !this.client) {
       return this.searchMemoryLocal(query, userId, limit);
     }
 
     try {
-      const results = await this.client.search(query, {
-        userId,
-        limit,
-      });
-
+      const results = await this.client.search(query, { userId, limit });
       return results.map((r: any) => ({
         id: r.id,
         content: r.memory,
@@ -127,7 +123,7 @@ export class Mem0Manager {
    * 获取用户所有记忆
    */
   async getAllMemories(userId: string): Promise<Memory[]> {
-    if (this.config.localMode) {
+    if (this.config.localMode || !this.client) {
       return this.localStore.get(userId) || [];
     }
 
@@ -150,8 +146,7 @@ export class Mem0Manager {
    * 删除记忆
    */
   async deleteMemory(memoryId: string): Promise<void> {
-    if (this.config.localMode) {
-      // 本地模式下遍历删除
+    if (this.config.localMode || !this.client) {
       for (const [userId, memories] of this.localStore) {
         const index = memories.findIndex(m => m.id === memoryId);
         if (index !== -1) {
@@ -180,10 +175,8 @@ export class Mem0Manager {
       this.localStore.set(userId, []);
     }
 
-    // 简单提取关键信息（实际应该用 LLM）
     const userMessages = messages.filter(m => m.role === 'user');
     for (const msg of userMessages) {
-      // 检查是否包含重要信息
       if (this.isImportantInfo(msg.content)) {
         const memory: Memory = {
           id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -204,7 +197,6 @@ export class Mem0Manager {
     limit: number
   ): Memory[] {
     const memories = this.localStore.get(userId) || [];
-    // 简单关键词匹配
     const queryWords = query.toLowerCase().split(/\s+/);
     
     return memories
@@ -218,7 +210,6 @@ export class Mem0Manager {
   }
 
   private isImportantInfo(content: string): boolean {
-    // 检测是否包含个人信息、偏好等
     const patterns = [
       /我叫|我的名字|我是/i,
       /我喜欢|我讨厌|我偏好/i,
@@ -238,14 +229,14 @@ export class Mem0Manager {
         score += 1;
       }
     }
-    return score / queryWords.length;
+    return queryWords.length > 0 ? score / queryWords.length : 0;
   }
 }
 
 /**
  * 混合记忆管理器
  * 
- * 结合 Mem0（长期语义记忆）和滑动窗口（短期上下文）
+ * 结合长期记忆和滑动窗口短期上下文
  */
 export class HybridMemoryManager {
   private mem0: Mem0Manager;
@@ -258,9 +249,6 @@ export class HybridMemoryManager {
 
   /**
    * 构建增强的上下文
-   * 
-   * 1. 从 Mem0 检索相关长期记忆
-   * 2. 结合短期对话历史
    */
   async buildContext(
     messages: Message[],
@@ -270,14 +258,8 @@ export class HybridMemoryManager {
     systemPrompt: string;
     relevantMemories: Memory[];
   }> {
-    // 检索相关长期记忆
-    const relevantMemories = await this.mem0.searchMemory(
-      currentQuery,
-      userId,
-      5
-    );
+    const relevantMemories = await this.mem0.searchMemory(currentQuery, userId, 5);
 
-    // 构建系统提示
     let systemPrompt = '';
     if (relevantMemories.length > 0) {
       systemPrompt = `[用户相关信息]\n${
@@ -285,7 +267,6 @@ export class HybridMemoryManager {
       }\n\n请根据这些信息提供个性化回复。`;
     }
 
-    // 自动将新对话添加到 Mem0
     if (messages.length > 0) {
       await this.mem0.addMemory(messages, userId);
     }
