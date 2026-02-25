@@ -42,7 +42,27 @@
 
 ## 快速开始
 
-### 1. 安装依赖
+### 方式一：Docker 部署 (推荐)
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/lukelzlz/infinite-chat.git
+cd infinite-chat
+
+# 2. 创建环境变量文件
+cp .env.example .env
+# 编辑 .env 填入你的 API Key
+
+# 3. 启动服务
+docker compose up -d
+
+# 4. 访问 Web UI
+open http://localhost:3000
+```
+
+### 方式二：本地开发
+
+#### 1. 安装依赖
 
 ```bash
 npm install
