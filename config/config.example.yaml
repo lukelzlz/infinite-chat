@@ -112,6 +112,12 @@ adapters:
     config:
       instanceUrl: "https://misskey.io"
       token: "your-misskey-api-token"
+  
+  # Web 界面
+  - type: web
+    enabled: true
+    config:
+      port: 3000
 
 # 插件配置（可选）
 plugins:

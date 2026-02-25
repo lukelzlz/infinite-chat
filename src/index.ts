@@ -12,6 +12,7 @@ export { TelegramAdapter } from './adapters/telegram';
 export { DiscordAdapter } from './adapters/discord';
 export { FeishuAdapter } from './adapters/feishu';
 export { MisskeyAdapter } from './adapters/misskey';
+export { WebAdapter } from './adapters/web';
 export { LLMProvider, OpenAIProvider, AnthropicProvider, LocalModelProvider } from './llm';
 export { Plugin, PluginManager, EchoPlugin, HelpPlugin, StatsPlugin } from './plugins';
 export { ContextManager } from './core/context';
@@ -42,6 +43,12 @@ export async function createEngineFromConfig(configPath: string): Promise<ChatBo
         engine.registerAdapter(new MisskeyAdapter({
           instanceUrl: adapterConfig.config.instanceUrl,
           token: adapterConfig.config.token,
+        }));
+        break;
+      case 'web':
+        const { WebAdapter } = await import('./adapters/web');
+        engine.registerAdapter(new WebAdapter({
+          port: adapterConfig.config.port || 3000,
         }));
         break;
       // 添加更多适配器...
