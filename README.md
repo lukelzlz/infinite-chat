@@ -1,17 +1,18 @@
 # infinite-chat
 
-🤖 **无限上下文** · **多用户支持** · **多平台接入** · **插件系统**
+🤖 **无限上下文** · **多 Agent 群聊** · **多平台接入** · **插件系统**
 
-一个类似 AstrBot 的聊天机器人框架，支持 Mem0 作为长期记忆层。
+一个类似 AstrBot 的聊天机器人框架，支持 Mem0 作为长期记忆层，支持多 Agent 协作。
 
 **GitHub**: https://github.com/lukelzlz/infinite-chat
 
 ## 特性
 
 - ✅ **无限上下文**: 短期滑动窗口 + Mem0 长期记忆 + 自动压缩
+- ✅ **多 Agent 群聊**: 支持多个 AI Agent 协作，群聊中 Agent 可互相响应
 - ✅ **多用户隔离**: 每个用户独立会话和上下文
-- ✅ **多平台支持**: Telegram、Discord、飞书、Web Chat
-- ✅ **多 LLM 支持**: OpenAI、Anthropic、本地模型(Ollama)
+- ✅ **多平台支持**: Telegram、Discord、飞书、**Misskey**、Web Chat
+- ✅ **多 LLM 支持**: OpenAI、Anthropic、本地模型(Ollama)、SiliconFlow
 - ✅ **插件系统**: 可扩展的插件架构
 - ✅ **TypeScript**: 完整类型支持
 
@@ -19,16 +20,21 @@
 
 ```
 ┌──────────────────────────────────────────────┐
-│         ChatBot Framework                     │
+│         infinite-chat Framework               │
 ├──────────────────────────────────────────────┤
-│  📡 适配器层   Telegram | Discord | 飞书     │
+│  📡 适配器层                                  │
+│    Telegram | Discord | 飞书 | Misskey       │
+├──────────────────────────────────────────────┤
+│  🤖 多 Agent 层                               │
+│    Agent 选择 | 群聊协作 | 链式响应           │
 ├──────────────────────────────────────────────┤
 │  🧠 核心引擎                                   │
 │    ├─ 无限上下文 (滑动窗口 + Mem0)           │
 │    ├─ 多用户会话隔离                          │
 │    └─ 消息路由                                │
 ├──────────────────────────────────────────────┤
-│  🔌 LLM 层   OpenAI | Anthropic | Ollama     │
+│  🔌 LLM 层                                    │
+│    OpenAI | Anthropic | Ollama | SiliconFlow │
 ├──────────────────────────────────────────────┤
 │  🧩 插件系统                                  │
 └──────────────────────────────────────────────┘

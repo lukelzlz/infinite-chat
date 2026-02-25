@@ -8,6 +8,8 @@ export interface Message {
   content: string;
   timestamp: number;
   metadata?: Record<string, any>;
+  /** Agent 标识（多 Agent 场景） */
+  agentId?: string;
 }
 
 /** 会话结构 */
@@ -19,6 +21,33 @@ export interface Session {
   createdAt: number;
   lastActiveAt: number;
   metadata?: Record<string, any>;
+  /** 群聊中激活的 Agent */
+  activeAgentId?: string;
+}
+
+/** Agent 定义 */
+export interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  systemPrompt: string;
+  /** 触发关键词 */
+  triggers?: string[];
+  /** LLM 配置覆盖 */
+  llmOverride?: Partial<LLMConfig>;
+  /** 是否是默认 Agent */
+  isDefault?: boolean;
+}
+
+/** 群聊配置 */
+export interface GroupChatConfig {
+  enabled: boolean;
+  /** Agent 之间是否可以互相响应 */
+  agentInteraction: boolean;
+  /** 最多连续 Agent 回复数 */
+  maxAgentChain: number;
+  /** 触发下一个 Agent 的概率阈值 */
+  chainThreshold: number;
 }
 
 /** 入站消息（来自平台） */
@@ -60,7 +89,7 @@ export interface MemoryConfig {
 
 /** 适配器配置 */
 export interface AdapterConfig {
-  type: 'telegram' | 'discord' | 'feishu' | 'web';
+  type: 'telegram' | 'discord' | 'feishu' | 'misskey' | 'web';
   enabled: boolean;
   config: Record<string, any>;
 }
@@ -70,6 +99,12 @@ export interface FrameworkConfig {
   llm: LLMConfig;
   memory: MemoryConfig;
   adapters: AdapterConfig[];
+  /** 多 Agent 配置 */
+  agents?: {
+    enabled: boolean;
+    list: Agent[];
+    groupChat: GroupChatConfig;
+  };
   plugins?: {
     enabled: string[];
     directory?: string;

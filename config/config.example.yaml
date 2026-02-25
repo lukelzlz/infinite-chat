@@ -33,6 +33,58 @@ memory:
   # 压缩阈值（消息数超过此值时触发摘要压缩）
   compressThreshold: 50
 
+# 多 Agent 配置
+agents:
+  enabled: true
+  
+  # Agent 列表
+  list:
+    - id: assistant
+      name: 小助手
+      description: 通用助手，负责日常对话
+      systemPrompt: |
+        你是一个友好、活泼的AI助手。
+        回复要简洁有趣，多用颜文字表达情绪。
+      triggers:
+        - 小助手
+        - 助手
+      isDefault: true
+    
+    - id: coder
+      name: 程序员
+      description: 代码专家，负责编程相关问题
+      systemPrompt: |
+        你是一个专业的程序员助手。
+        精通各种编程语言，提供高质量的代码建议。
+      triggers:
+        - 代码
+        - 编程
+        - bug
+        - 程序员
+      llmOverride:
+        model: deepseek-ai/DeepSeek-V3
+    
+    - id: creative
+      name: 创意师
+      description: 创意专家，负责头脑风暴和创意生成
+      systemPrompt: |
+        你是一个富有创造力的AI助手。
+        擅长头脑风暴，提供新颖有趣的创意。
+      triggers:
+        - 创意
+        - 想法
+        - 点子
+  
+  # 群聊配置
+  groupChat:
+    enabled: true
+    # Agent 之间是否可以互相响应
+    agentInteraction: true
+    # 最多连续 Agent 回复数
+    maxAgentChain: 3
+    # 触发下一个 Agent 的概率阈值 (0-1)
+    chainThreshold: 0.5
+
 # 平台适配器配置
 adapters:
   # Telegram 机器人
@@ -53,6 +105,13 @@ adapters:
     config:
       appId: "your-app-id"
       appSecret: "your-app-secret"
+  
+  # Misskey 机器人
+  - type: misskey
+    enabled: false
+    config:
+      instanceUrl: "https://misskey.io"
+      token: "your-misskey-api-token"
 
 # 插件配置（可选）
 plugins:

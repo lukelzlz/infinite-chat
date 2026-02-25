@@ -1,18 +1,22 @@
 import { ChatBotEngine } from './core/engine';
 import { TelegramAdapter } from './adapters/telegram';
+import { MisskeyAdapter } from './adapters/misskey';
 import { FrameworkConfig } from './core/types';
 import yaml from 'yaml';
 import fs from 'fs';
 import path from 'path';
 
-export { ChatBotEngine } from './core/engine';
+export { ChatBotEngine, AgentManager } from './core/engine';
 export { PlatformAdapter } from './adapters/base';
 export { TelegramAdapter } from './adapters/telegram';
+export { DiscordAdapter } from './adapters/discord';
+export { FeishuAdapter } from './adapters/feishu';
+export { MisskeyAdapter } from './adapters/misskey';
 export { LLMProvider, OpenAIProvider, AnthropicProvider, LocalModelProvider } from './llm';
 export { Plugin, PluginManager, EchoPlugin, HelpPlugin, StatsPlugin } from './plugins';
 export { ContextManager } from './core/context';
 export { HybridMemoryManager, Mem0Manager } from './core/memory';
-export type { FrameworkConfig, Message, IncomingMessage, Session } from './core/types';
+export type { FrameworkConfig, Message, IncomingMessage, Session, Agent, GroupChatConfig } from './core/types';
 
 /**
  * 从配置文件创建引擎
@@ -33,6 +37,12 @@ export async function createEngineFromConfig(configPath: string): Promise<ChatBo
     switch (adapterConfig.type) {
       case 'telegram':
         engine.registerAdapter(new TelegramAdapter(adapterConfig.config.token));
+        break;
+      case 'misskey':
+        engine.registerAdapter(new MisskeyAdapter({
+          instanceUrl: adapterConfig.config.instanceUrl,
+          token: adapterConfig.config.token,
+        }));
         break;
       // 添加更多适配器...
     }

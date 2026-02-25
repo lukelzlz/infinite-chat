@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { FrameworkConfig, Message, IncomingMessage, Session } from './types';
 import { ContextManager } from './context';
 import { HybridMemoryManager, Mem0Config } from './memory';
+import { AgentManager } from './agents';
 import { LLMProvider, createLLMProvider } from '../llm';
 import { PlatformAdapter } from '../adapters/base';
 import { Plugin, PluginManager } from '../plugins';
@@ -21,6 +22,7 @@ export class ChatBotEngine {
   private llmProvider!: LLMProvider;
   private contextManager: ContextManager;
   private memoryManager: HybridMemoryManager;
+  private agentManager?: AgentManager;
   private pluginManager: PluginManager;
   private sessions: Map<string, Session> = new Map();
   private isRunning = false;
@@ -35,6 +37,15 @@ export class ChatBotEngine {
       localMode: !process.env.MEM0_API_KEY,
     };
     this.memoryManager = new HybridMemoryManager(mem0Config, config.memory.shortTermWindow);
+    
+    // 初始化多 Agent 管理器
+    if (config.agents?.enabled && config.agents.list.length > 0) {
+      this.agentManager = new AgentManager(
+        config.agents.list,
+        config.agents.groupChat,
+        config.llm
+      );
+    }
     
     // 初始化插件管理器
     this.pluginManager = new PluginManager();
@@ -129,7 +140,6 @@ export class ChatBotEngine {
       // 检查是否是插件命令
       const pluginResult = await this.pluginManager.processMessage(content, session);
       if (pluginResult) {
-        // 插件处理了消息
         const adapter = this.adapters.get(session.platform);
         if (adapter) {
           await adapter.sendMessage(sessionId, pluginResult);
@@ -148,15 +158,31 @@ export class ChatBotEngine {
       // 获取上下文
       const messages = await this.contextManager.getContext(sessionId);
 
-      // 使用 Mem0 构建增强上下文
-      const { systemPrompt, relevantMemories } = await this.memoryManager.buildContext(
-        messages,
-        session.userId,
-        content
-      );
+      // 选择 Agent（如果启用多 Agent）
+      let selectedAgent = null;
+      let llmProvider = this.llmProvider;
+      let systemPrompt: string | undefined;
+
+      if (this.agentManager) {
+        selectedAgent = this.agentManager.selectAgent(content, messages);
+        llmProvider = this.agentManager.getLLMProvider(selectedAgent.id);
+        systemPrompt = this.agentManager.buildMultiAgentSystemPrompt(
+          selectedAgent,
+          !!session.groupId
+        );
+        console.log(`[Engine] Selected agent: ${selectedAgent.name}`);
+      } else {
+        // 使用 Mem0 构建增强上下文
+        const memContext = await this.memoryManager.buildContext(
+          messages,
+          session.userId,
+          content
+        );
+        systemPrompt = memContext.systemPrompt;
+      }
 
       // 调用 LLM
-      const response = await this.llmProvider.chat(messages, {
+      const response = await llmProvider.chat(messages, {
         systemPrompt,
         temperature: this.config.llm.temperature,
         maxTokens: this.config.llm.maxTokens,
@@ -167,23 +193,91 @@ export class ChatBotEngine {
         sessionId,
         role: 'assistant',
         content: response,
+        agentId: selectedAgent?.id,
       });
 
       // 发送回复
       const adapter = this.adapters.get(session.platform);
       if (adapter) {
-        await adapter.sendMessage(sessionId, response);
+        // 如果是群聊且启用了多 Agent，可能需要链式回复
+        if (session.groupId && this.agentManager?.getGroupChatConfig().agentInteraction) {
+          await this.sendMessageWithPossibleChain(
+            adapter,
+            sessionId,
+            response,
+            selectedAgent?.id,
+            0
+          );
+        } else {
+          await adapter.sendMessage(sessionId, response);
+        }
       }
 
       console.log(`[Engine] Response sent to ${sessionId}`);
     } catch (e) {
       console.error(`[Engine] Error processing message:`, e);
       
-      // 发送错误消息
       const adapter = this.adapters.get(sessionId.split(':')[0]);
       if (adapter) {
         await adapter.sendMessage(sessionId, '抱歉，处理消息时出错。请稍后重试。');
       }
+    }
+  }
+
+  /**
+   * 发送消息并可能触发链式 Agent 回复
+   */
+  private async sendMessageWithPossibleChain(
+    adapter: PlatformAdapter,
+    sessionId: string,
+    response: string,
+    lastAgentId: string | undefined,
+    chainCount: number
+  ): Promise<void> {
+    // 发送当前回复
+    await adapter.sendMessage(sessionId, response);
+
+    // 检查是否需要链式回复
+    if (!this.agentManager || !lastAgentId) return;
+
+    const { shouldChain, nextAgent } = this.agentManager.shouldChainAgent(
+      lastAgentId,
+      response,
+      chainCount
+    );
+
+    if (shouldChain && nextAgent) {
+      // 短暂延迟
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // 获取上下文
+      const messages = await this.contextManager.getContext(sessionId);
+      const llmProvider = this.agentManager.getLLMProvider(nextAgent.id);
+      const systemPrompt = this.agentManager.buildMultiAgentSystemPrompt(nextAgent, true);
+
+      // 生成回复
+      const chainResponse = await llmProvider.chat(messages, {
+        systemPrompt,
+        temperature: this.config.llm.temperature,
+        maxTokens: this.config.llm.maxTokens,
+      });
+
+      // 添加到上下文
+      await this.contextManager.addMessage(sessionId, {
+        sessionId,
+        role: 'assistant',
+        content: chainResponse,
+        agentId: nextAgent.id,
+      });
+
+      // 递归检查是否继续链式
+      await this.sendMessageWithPossibleChain(
+        adapter,
+        sessionId,
+        chainResponse,
+        nextAgent.id,
+        chainCount + 1
+      );
     }
   }
 
@@ -260,17 +354,20 @@ export class ChatBotEngine {
     adapters: string[];
     sessions: number;
     plugins: number;
+    agents: number;
   } {
     return {
       isRunning: this.isRunning,
       adapters: Array.from(this.adapters.keys()),
       sessions: this.sessions.size,
       plugins: this.pluginManager.getPlugins().length,
+      agents: this.agentManager?.getAllAgents().length || 0,
     };
   }
 }
 
 // 导出
-export { FrameworkConfig, Message, IncomingMessage, Session };
+export { FrameworkConfig, Message, IncomingMessage, Session, Agent } from './types';
 export { ContextManager } from './context';
 export { HybridMemoryManager } from './memory';
+export { AgentManager } from './agents';
