@@ -82,13 +82,15 @@ export class TelegramAdapter extends PlatformAdapter {
       });
     }
     
-    // 如果没有文本且没有可处理的附件，跳过
-    if (!text && attachments.length === 0) return;
-    if (!text && attachments.some(a => a.type !== 'document')) return;
+    // 如果没有文本且没有文档附件，跳过（图片等非文档类型需要文本才处理）
+    if (!text && !attachments.some(a => a.type === 'document')) return;
+    
+    // 纯文档消息的 content 为空字符串
+    const msgContent = text || '';
     
     const msg: IncomingMessage = {
       sessionId: this.formatSessionId('telegram', ctx.from.id.toString(), chatId?.toString()),
-      content: text || '[文档]',
+      content: msgContent,
       sender: {
         id: ctx.from.id.toString(),
         name: ctx.from.first_name,
@@ -103,7 +105,8 @@ export class TelegramAdapter extends PlatformAdapter {
       attachments: attachments.length > 0 ? attachments : undefined,
     };
     
-    console.log(`[Telegram] Received message from ${ctx.from.id}: ${text.slice(0, 50)}...`);
+    const logPreview = msgContent || `[文档: ${attachments.map(a => a.filename).join(', ')}]`;
+    console.log(`[Telegram] Received message from ${ctx.from.id}: ${logPreview.slice(0, 50)}...`);
     
     if (this.messageCallback) {
       try {

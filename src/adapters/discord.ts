@@ -50,13 +50,16 @@ export class DiscordAdapter extends PlatformAdapter {
       // 如果没有文本且没有可处理的附件，跳过
       if (!msg.content && attachments.length === 0) return;
       
+      // 纯文档消息的 content 为空字符串
+      const msgContent = msg.content || '';
+      
       const incomingMsg: IncomingMessage = {
         sessionId: this.formatSessionId(
           'discord',
           msg.author.id,
           msg.guildId ?? undefined
         ),
-        content: msg.content || '[文档]',
+        content: msgContent,
         sender: {
           id: msg.author.id,
           name: msg.author.username,

@@ -7,6 +7,7 @@ import { getRAGService } from '../rag';
  * 
  * 命令：
  * - /rag upload <文件名> <内容> - 上传文档
+ * - /rag import - 回复消息导入（回复某条消息，将其导入知识库）
  * - /rag list - 列出所有文档
  * - /rag search <关键词> - 搜索文档
  * - /rag delete <文档ID> - 删除文档
@@ -18,11 +19,17 @@ export class RAGPlugin implements Plugin {
   description = 'RAG 文档管理和检索';
 
   shouldHandle(content: string, session: Session): boolean {
-    return content.startsWith('/rag');
+    return content.startsWith('/rag') || content === '/import';
   }
 
   async handle(content: string, session: Session): Promise<string | null> {
     const rag = getRAGService();
+    
+    // 简化命令: /import
+    if (content === '/import') {
+      return this.handleImport(session);
+    }
+    
     const args = content.slice(4).trim().split(/\s+/);
     const command = args[0]?.toLowerCase();
 
@@ -30,6 +37,8 @@ export class RAGPlugin implements Plugin {
       switch (command) {
         case 'upload':
           return await this.handleUpload(args, rag);
+        case 'import':
+          return this.handleImport(session);
         case 'list':
         case 'ls':
           return await this.handleList(rag);
@@ -48,6 +57,30 @@ export class RAGPlugin implements Plugin {
       console.error('[RAGPlugin] Error:', error);
       return `❌ 操作失败: ${error instanceof Error ? error.message : '未知错误'}`;
     }
+  }
+
+  /**
+   * 导入当前消息或回复的消息
+   */
+  private handleImport(session: Session): string {
+    // 检查是否有回复的消息
+    const replyContent = session.metadata?.replyToContent;
+    const originalContent = session.metadata?.originalContent;
+    
+    if (!replyContent && !originalContent) {
+      return `💡 使用方法：
+1. 回复一条消息，然后发送 /import
+2. 或者直接发送: /rag import <内容>
+
+示例: 回复一条长消息后，发送 /import 即可导入`;
+    }
+
+    // TODO: 这里需要适配器支持获取回复消息的内容
+    // 目前先返回提示
+    return `⚠️ 回复导入功能需要适配器支持获取原消息内容。
+
+临时方案：直接复制消息内容，使用：
+/rag upload 消息标题 <消息内容>`;
   }
 
   private async handleUpload(args: string[], rag: ReturnType<typeof getRAGService>): Promise<string> {
@@ -141,11 +174,15 @@ ${preview}`;
 
 命令列表:
 /rag upload <文件名> <内容> - 上传文档
+/rag import - 回复消息导入（开发中）
 /rag list - 列出所有文档
 /rag search <关键词> - 搜索文档
 /rag delete <文档ID> - 删除文档
 /rag stats - 查看统计信息
 
-💡 提示: 上传文档后，AI 会自动参考知识库内容回答问题`;
+💡 提示:
+- 直接发送 txt/md/json/csv 等文档文件，会自动导入
+- 支持的格式: txt, md, json, csv, log, js, ts, py, go, rs 等
+- 最大文件大小: 5MB`;
   }
 }

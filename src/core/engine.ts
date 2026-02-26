@@ -132,7 +132,8 @@ export class ChatBotEngine {
   private async handleIncomingMessage(incoming: IncomingMessage): Promise<void> {
     const { sessionId, content, sender, attachments } = incoming;
 
-    console.log(`[Engine] Message from ${sessionId}: ${content.slice(0, 50)}...`);
+    const logPreview = content || `[附件: ${attachments?.length || 0} 个]`;
+    console.log(`[Engine] Message from ${sessionId}: ${logPreview.slice(0, 50)}...`);
 
     try {
       // 获取或创建会话
