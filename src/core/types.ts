@@ -14,14 +14,13 @@ export interface Message {
 
 /** 会话结构 */
 export interface Session {
-  id: string;           // 格式: platform:userId (如 telegram:12345)
+  id: string;
   platform: string;
   userId: string;
-  groupId?: string;     // 群聊场景
+  groupId?: string;
   createdAt: number;
   lastActiveAt: number;
   metadata?: Record<string, any>;
-  /** 群聊中激活的 Agent */
   activeAgentId?: string;
 }
 
@@ -31,26 +30,20 @@ export interface Agent {
   name: string;
   description?: string;
   systemPrompt: string;
-  /** 触发关键词 */
   triggers?: string[];
-  /** LLM 配置覆盖 */
   llmOverride?: Partial<LLMConfig>;
-  /** 是否是默认 Agent */
   isDefault?: boolean;
 }
 
 /** 群聊配置 */
 export interface GroupChatConfig {
   enabled: boolean;
-  /** Agent 之间是否可以互相响应 */
   agentInteraction: boolean;
-  /** 最多连续 Agent 回复数 */
   maxAgentChain: number;
-  /** 触发下一个 Agent 的概率阈值 */
   chainThreshold: number;
 }
 
-/** 入站消息（来自平台） */
+/** 入站消息 */
 export interface IncomingMessage {
   sessionId: string;
   content: string;
@@ -63,6 +56,39 @@ export interface IncomingMessage {
   metadata?: Record<string, any>;
 }
 
+/** LLM 高级参数 */
+export interface LLMAdvancedParams {
+  /** 思考/推理模式 */
+  reasoning?: {
+    enabled: boolean;
+    effort?: 'low' | 'medium' | 'high';
+    /** 是否显示思考过程 */
+    showThinking?: boolean;
+  };
+  /** 上下文长度 */
+  contextLength?: number;
+  /** Top P 采样 */
+  topP?: number;
+  /** Top K 采样 */
+  topK?: number;
+  /** 频率惩罚 */
+  frequencyPenalty?: number;
+  /** 存在惩罚 */
+  presencePenalty?: number;
+  /** 停止词 */
+  stopSequences?: string[];
+  /** 响应格式 */
+  responseFormat?: 'text' | 'json';
+  /** 种子（可复现输出） */
+  seed?: number;
+  /** 流式输出 */
+  stream?: boolean;
+  /** 重试次数 */
+  maxRetries?: number;
+  /** 超时（毫秒） */
+  timeout?: number;
+}
+
 /** LLM 配置 */
 export interface LLMConfig {
   provider: 'openai' | 'anthropic' | 'local' | 'siliconflow' | 'openai-compatible' | 'custom';
@@ -71,8 +97,9 @@ export interface LLMConfig {
   baseUrl?: string;
   maxTokens?: number;
   temperature?: number;
-  /** 自定义模型预设名称 */
   preset?: string;
+  /** 高级参数 */
+  advanced?: LLMAdvancedParams;
 }
 
 /** 自定义模型配置 */
@@ -80,21 +107,17 @@ export interface CustomModelConfig {
   baseUrl: string;
   model: string;
   description?: string;
-  /** 额外参数 */
   extraParams?: Record<string, any>;
 }
 
 /** 记忆配置 */
 export interface MemoryConfig {
-  /** 短期记忆窗口大小 */
   shortTermWindow: number;
-  /** 向量数据库配置 */
   vectorDb?: {
     type: 'chromadb' | 'memory';
     url?: string;
     collection?: string;
   };
-  /** 压缩阈值（消息数） */
   compressThreshold: number;
 }
 
@@ -110,7 +133,6 @@ export interface FrameworkConfig {
   llm: LLMConfig;
   memory: MemoryConfig;
   adapters: AdapterConfig[];
-  /** 多 Agent 配置 */
   agents?: {
     enabled: boolean;
     list: Agent[];
@@ -124,4 +146,18 @@ export interface FrameworkConfig {
     level: 'debug' | 'info' | 'warn' | 'error';
     file?: string;
   };
+  /** 热加载配置 */
+  hotReload?: {
+    enabled: boolean;
+    watchPath?: string;
+    debounceMs?: number;
+  };
+}
+
+/** 配置变更事件 */
+export interface ConfigChangeEvent {
+  type: 'llm' | 'agents' | 'adapters' | 'plugins' | 'all';
+  oldConfig: Partial<FrameworkConfig>;
+  newConfig: Partial<FrameworkConfig>;
+  timestamp: number;
 }

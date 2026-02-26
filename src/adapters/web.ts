@@ -89,6 +89,65 @@ export class WebAdapter extends PlatformAdapter {
       res.json({ agents: status.agents || [] });
     });
 
+    // 配置 API
+    this.app.get('/api/config', (req, res) => {
+      if (!this.engine) {
+        res.json({ error: 'Engine not initialized' });
+        return;
+      }
+      const config = this.engine.getConfig?.() || {};
+      // 隐藏敏感信息
+      const safeConfig = this.sanitizeConfig(config);
+      res.json(safeConfig);
+    });
+
+    this.app.post('/api/config', (req, res) => {
+      if (!this.engine) {
+        res.json({ error: 'Engine not initialized' });
+        return;
+      }
+      
+      try {
+        this.engine.updateConfig?.(req.body);
+        res.json({ success: true });
+      } catch (e: any) {
+        res.json({ error: e.message });
+      }
+    });
+
+    this.app.post('/api/config/llm', (req, res) => {
+      if (!this.engine) {
+        res.json({ error: 'Engine not initialized' });
+        return;
+      }
+      
+      try {
+        this.engine.updateLLMConfig?.(req.body);
+        res.json({ success: true });
+      } catch (e: any) {
+        res.json({ error: e.message });
+      }
+    });
+
+    // 获取预设模型列表
+    this.app.get('/api/models/presets', (req, res) => {
+      const presets = [
+        { id: 'deepseek-chat', name: 'DeepSeek Chat', provider: 'deepseek' },
+        { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'deepseek' },
+        { id: 'moonshot-v1-8k', name: 'Kimi 8K', provider: 'moonshot' },
+        { id: 'moonshot-v1-32k', name: 'Kimi 32K', provider: 'moonshot' },
+        { id: 'moonshot-v1-128k', name: 'Kimi 128K', provider: 'moonshot' },
+        { id: 'glm-4', name: 'GLM-4', provider: 'zhipu' },
+        { id: 'glm-4-flash', name: 'GLM-4 Flash', provider: 'zhipu' },
+        { id: 'qwen-turbo', name: '通义千问 Turbo', provider: 'alibaba' },
+        { id: 'qwen-plus', name: '通义千问 Plus', provider: 'alibaba' },
+        { id: 'qwen-max', name: '通义千问 Max', provider: 'alibaba' },
+        { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
+        { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', provider: 'anthropic' },
+      ];
+      res.json({ presets });
+    });
+
     // SPA 回退
     this.app.get('*', (req, res) => {
       res.sendFile(path.join(webDir, 'index.html'));
@@ -357,5 +416,34 @@ export class WebAdapter extends PlatformAdapter {
    */
   getClientCount(): number {
     return this.clients.size;
+  }
+
+  /**
+   * 清理配置中的敏感信息
+   */
+  private sanitizeConfig(config: any): any {
+    const safe = { ...config };
+    
+    if (safe.llm) {
+      safe.llm = { ...safe.llm };
+      if (safe.llm.apiKey) {
+        safe.llm.apiKey = '***' + safe.llm.apiKey.slice(-4);
+      }
+    }
+    
+    if (safe.adapters) {
+      safe.adapters = safe.adapters.map((adapter: any) => {
+        const a = { ...adapter };
+        if (a.config) {
+          a.config = { ...a.config };
+          if (a.config.token) a.config.token = '***';
+          if (a.config.apiKey) a.config.apiKey = '***';
+          if (a.config.secret) a.config.secret = '***';
+        }
+        return a;
+      });
+    }
+    
+    return safe;
   }
 }
