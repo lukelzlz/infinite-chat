@@ -1,6 +1,7 @@
 import { Plugin } from './types';
 import { BrowserTool } from '../tools/browser';
 import { Session } from '../core/types';
+import { validateUrl, UrlValidationResult } from '../utils/security';
 
 /**
  * 浏览器插件
@@ -46,6 +47,21 @@ export class BrowserPlugin implements Plugin {
   }
 
   /**
+   * 验证并规范化 URL
+   */
+  private validateAndNormalizeUrl(url: string): { valid: boolean; url?: string; error?: string } {
+    const validation = validateUrl(url, {
+      allowPrivateIp: false, // 默認不允許訪問私有 IP
+    });
+
+    if (!validation.valid) {
+      return { valid: false, error: validation.error };
+    }
+
+    return { valid: true, url: validation.normalizedUrl };
+  }
+
+  /**
    * /browse <url> - 浏览网页并提取内容
    */
   private async browse(url: string): Promise<string> {
@@ -53,13 +69,14 @@ export class BrowserPlugin implements Plugin {
       return '用法: /browse <URL>';
     }
 
-    // 添加协议前缀
-    if (!url.startsWith('http')) {
-      url = 'https://' + url;
+    // 安全驗證 URL（SSRF 防護）
+    const validation = this.validateAndNormalizeUrl(url);
+    if (!validation.valid) {
+      return `URL 驗證失敗: ${validation.error}`;
     }
 
-    const content = await this.browser.extractUrl(url);
-    
+    const content = await this.browser.extractUrl(validation.url!);
+
     if (!content) {
       return '无法访问该网页';
     }
@@ -81,12 +98,14 @@ export class BrowserPlugin implements Plugin {
       return '用法: /screenshot <URL>';
     }
 
-    if (!url.startsWith('http')) {
-      url = 'https://' + url;
+    // 安全驗證 URL（SSRF 防護）
+    const validation = this.validateAndNormalizeUrl(url);
+    if (!validation.valid) {
+      return `URL 驗證失敗: ${validation.error}`;
     }
 
-    const screenshot = await this.browser.screenshot(url);
-    
+    const screenshot = await this.browser.screenshot(validation.url!);
+
     if (!screenshot) {
       return '截图失败';
     }
@@ -103,12 +122,14 @@ export class BrowserPlugin implements Plugin {
       return '用法: /title <URL>';
     }
 
-    if (!url.startsWith('http')) {
-      url = 'https://' + url;
+    // 安全驗證 URL（SSRF 防護）
+    const validation = this.validateAndNormalizeUrl(url);
+    if (!validation.valid) {
+      return `URL 驗證失敗: ${validation.error}`;
     }
 
-    const title = await this.browser.getTitle(url);
-    
+    const title = await this.browser.getTitle(validation.url!);
+
     if (!title) {
       return '无法获取标题';
     }

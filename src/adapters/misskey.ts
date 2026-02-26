@@ -1,5 +1,6 @@
 import { PlatformAdapter } from './base';
 import { IncomingMessage } from '../core/types';
+import { safeJsonParse, sanitizeHtml } from '../utils/security';
 
 /**
  * Misskey 平台适配器
@@ -164,14 +165,15 @@ export class MisskeyAdapter extends PlatformAdapter {
 
   private handleWebSocketMessage(data: string): void {
     try {
-      const msg = JSON.parse(data);
-      
+      // 使用安全的 JSON 解析
+      const msg = safeJsonParse<{ type?: string; body?: any }>(data, {});
+
       if (msg.type !== 'channel') return;
-      
+
       const body = msg.body;
-      
+
       // 处理不同类型的事件
-      switch (body.type) {
+      switch (body?.type) {
         case 'mention':
           this.handleMention(body.body);
           break;
@@ -187,7 +189,7 @@ export class MisskeyAdapter extends PlatformAdapter {
           break;
       }
     } catch (e) {
-      console.error('[Misskey] Failed to parse message:', e);
+      console.error('[Misskey] Failed to parse message:', (e as Error).message);
     }
   }
 
@@ -269,12 +271,7 @@ export class MisskeyAdapter extends PlatformAdapter {
   }
 
   private stripHtml(text: string): string {
-    return text
-      .replace(/<[^>]*>/g, '')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
-      .trim();
+    return sanitizeHtml(text);
   }
 
   private scheduleReconnect(): void {

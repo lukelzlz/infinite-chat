@@ -1,4 +1,5 @@
 import { Message } from './types';
+import { generateSecureId, validateApiKey } from '../utils/security';
 
 /**
  * Mem0 记忆层集成
@@ -35,7 +36,13 @@ export class Mem0Manager {
 
   constructor(config: Mem0Config) {
     this.config = { localMode: true, ...config };
-    
+
+    // 驗證 API Key 格式
+    if (!this.config.localMode && config.apiKey && !validateApiKey(config.apiKey)) {
+      console.warn('[Mem0] Invalid API key format, using local mode');
+      this.config.localMode = true;
+    }
+
     // 只有明确提供 API Key 且不是本地模式时才尝试初始化客户端
     if (!this.config.localMode && config.apiKey) {
       this.initClient();
@@ -179,7 +186,7 @@ export class Mem0Manager {
     for (const msg of userMessages) {
       if (this.isImportantInfo(msg.content)) {
         const memory: Memory = {
-          id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          id: `local-${Date.now()}-${generateSecureId(8)}`,
           content: msg.content,
           userId,
           metadata,

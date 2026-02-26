@@ -4,6 +4,13 @@
  * 使用 OpenClaw 内置的 browserless 服务
  */
 
+import {
+  validateUrl,
+  escapeCssSelector,
+  escapeJsString,
+  UrlValidationResult,
+} from '../utils/security';
+
 export interface BrowserConfig {
   /** browserless 服务地址 */
   serverUrl?: string;
@@ -11,6 +18,10 @@ export interface BrowserConfig {
   authToken?: string;
   /** 默认超时（毫秒） */
   timeout?: number;
+  /** 允许的域名白名單 */
+  allowedHosts?: string[];
+  /** 是否允許訪問私有 IP */
+  allowPrivateIp?: boolean;
 }
 
 export interface BrowserAction {
@@ -40,7 +51,19 @@ export class BrowserTool {
       serverUrl: config.serverUrl || process.env.BROWSERLESS_URL || 'http://localhost:43242',
       authToken: config.authToken || process.env.BROWSERLESS_TOKEN,
       timeout: config.timeout || 30000,
+      allowedHosts: config.allowedHosts || [],
+      allowPrivateIp: config.allowPrivateIp || false,
     };
+  }
+
+  /**
+   * 驗證 URL 是否安全
+   */
+  private validateUrl(url: string): UrlValidationResult {
+    return validateUrl(url, {
+      allowPrivateIp: this.config.allowPrivateIp,
+      allowedHosts: this.config.allowedHosts,
+    });
   }
 
   /**
@@ -97,16 +120,24 @@ export class BrowserTool {
    * 导航到 URL
    */
   private async navigate(url: string): Promise<{ navigated: string }> {
-    // 通过 browserless API 导航
-    const response = await fetch(`${this.config.serverUrl}/json/new?${encodeURIComponent(url)}`, {
+    // 驗證 URL（SSRF 防護）
+    const validation = this.validateUrl(url);
+    if (!validation.valid) {
+      throw new Error(`URL 驗證失敗: ${validation.error}`);
+    }
+
+    const safeUrl = validation.normalizedUrl!;
+
+    // 通過 browserless API 導航
+    const response = await fetch(`${this.config.serverUrl}/json/new?${encodeURIComponent(safeUrl)}`, {
       headers: this.getHeaders(),
     });
-    
+
     if (!response.ok) {
       throw new Error(`Navigate failed: ${response.statusText}`);
     }
 
-    return { navigated: url };
+    return { navigated: safeUrl };
   }
 
   /**
@@ -136,12 +167,18 @@ export class BrowserTool {
    * 点击元素
    */
   private async click(selector: string): Promise<{ clicked: string }> {
+    // 安全轉義 CSS 選擇器
+    const safeSelector = escapeCssSelector(selector);
+    if (!safeSelector) {
+      throw new Error('無效的 CSS 選擇器');
+    }
+
     // 使用 browserless 的 evaluate API 执行点击
     const response = await fetch(`${this.config.serverUrl}/evaluate`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({
-        expression: `document.querySelector('${selector}')?.click()`,
+        expression: `document.querySelector(${JSON.stringify(safeSelector)})?.click()`,
       }),
     });
 
@@ -149,20 +186,31 @@ export class BrowserTool {
       throw new Error(`Click failed: ${response.statusText}`);
     }
 
-    return { clicked: selector };
+    return { clicked: safeSelector };
   }
 
   /**
    * 输入文本
    */
   private async type(selector: string, text: string): Promise<{ typed: string }> {
+    // 安全轉義 CSS 選擇器和文本
+    const safeSelector = escapeCssSelector(selector);
+    if (!safeSelector) {
+      throw new Error('無效的 CSS 選擇器');
+    }
+
+    // 限制輸入長度
+    const maxLength = 10000;
+    const safeText = text.length > maxLength ? text.slice(0, maxLength) : text;
+    const escapedText = escapeJsString(safeText);
+
     const response = await fetch(`${this.config.serverUrl}/evaluate`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({
         expression: `
-          const el = document.querySelector('${selector}');
-          if (el) { el.value = '${text.replace(/'/g, "\\'")}'; el.dispatchEvent(new Event('input')); }
+          const el = document.querySelector(${JSON.stringify(safeSelector)});
+          if (el) { el.value = '${escapedText}'; el.dispatchEvent(new Event('input')); }
         `,
       }),
     });
@@ -171,7 +219,7 @@ export class BrowserTool {
       throw new Error(`Type failed: ${response.statusText}`);
     }
 
-    return { typed: text };
+    return { typed: safeText };
   }
 
   /**
@@ -198,9 +246,18 @@ export class BrowserTool {
    * 提取页面内容
    */
   private async extract(selector?: string): Promise<{ content: string }> {
-    const expression = selector
-      ? `document.querySelector('${selector}')?.textContent || ''`
-      : `document.body.textContent || ''`;
+    let expression: string;
+
+    if (selector) {
+      // 安全轉義選擇器
+      const safeSelector = escapeCssSelector(selector);
+      if (!safeSelector) {
+        throw new Error('無效的 CSS 選擇器');
+      }
+      expression = `document.querySelector(${JSON.stringify(safeSelector)})?.textContent || ''`;
+    } else {
+      expression = `document.body.textContent || ''`;
+    }
 
     const response = await fetch(`${this.config.serverUrl}/evaluate`, {
       method: 'POST',

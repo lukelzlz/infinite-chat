@@ -5,6 +5,7 @@ import { FrameworkConfig } from './core/types';
 import yaml from 'yaml';
 import fs from 'fs';
 import path from 'path';
+import { validateFilePath } from './utils/security';
 
 export { ChatBotEngine, AgentManager } from './core/engine';
 export { PlatformAdapter } from './adapters/base';
@@ -23,7 +24,24 @@ export type { FrameworkConfig, Message, IncomingMessage, Session, Agent, GroupCh
  * 从配置文件创建引擎
  */
 export async function createEngineFromConfig(configPath: string): Promise<ChatBotEngine> {
-  const configContent = fs.readFileSync(configPath, 'utf-8');
+  // 驗證配置文件路徑（防止路徑遍歷）
+  const allowedConfigDirs = [
+    path.join(__dirname, '../config'),
+    path.join(__dirname, '../../config'),
+    process.cwd(), // 允許當前工作目錄
+  ];
+
+  const pathValidation = validateFilePath(configPath, allowedConfigDirs);
+  if (!pathValidation.valid) {
+    throw new Error(`配置文件路徑無效: ${pathValidation.error}`);
+  }
+
+  // 檢查文件是否存在
+  if (!fs.existsSync(pathValidation.normalizedPath!)) {
+    throw new Error(`配置文件不存在: ${configPath}`);
+  }
+
+  const configContent = fs.readFileSync(pathValidation.normalizedPath!, 'utf-8');
   const config: FrameworkConfig = yaml.parse(configContent);
 
   // 替换环境变量

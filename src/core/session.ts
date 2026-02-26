@@ -1,5 +1,6 @@
 import { Session } from './types';
 import { Redis } from 'ioredis';
+import { safeJsonParse } from '../utils/security';
 
 /**
  * 会话管理器
@@ -20,14 +21,20 @@ export class SessionManager {
   async getOrCreate(sessionId: string, platform: string, userId: string, groupId?: string): Promise<Session> {
     // 先从内存中查找
     let session = this.sessions.get(sessionId);
-    
+
     if (!session) {
-      // 尝试从 Redis 加载
+      // 尝试从 Redis 加载（使用安全的 JSON 解析）
       if (this.redis) {
         const cached = await this.redis.get(`session:${sessionId}`);
         if (cached) {
-          session = JSON.parse(cached);
-          this.sessions.set(sessionId, session!);
+          // 使用安全解析防止原型污染
+          const parsed = safeJsonParse<Session | null>(cached, null);
+          if (parsed && parsed.id) {
+            session = parsed;
+            this.sessions.set(sessionId, session);
+          } else {
+            console.warn(`[Session] Invalid session data for ${sessionId}`);
+          }
         }
       }
     }
@@ -48,7 +55,7 @@ export class SessionManager {
 
     // 更新活跃时间
     session.lastActiveAt = Date.now();
-    
+
     return session;
   }
 

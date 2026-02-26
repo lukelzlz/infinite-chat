@@ -1,5 +1,6 @@
 import { PlatformAdapter } from './base';
 import { IncomingMessage } from '../core/types';
+import { safeJsonParse } from '../utils/security';
 
 /**
  * 飞书适配器
@@ -89,7 +90,8 @@ export class FeishuAdapter extends PlatformAdapter {
       
       let content = '';
       try {
-        const contentJson = JSON.parse(message.content);
+        // 使用安全的 JSON 解析防止原型污染
+        const contentJson = safeJsonParse<{ text?: string }>(message.content, {});
         content = contentJson.text || '';
       } catch {
         content = message.content;

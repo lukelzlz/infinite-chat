@@ -1,4 +1,5 @@
 import { Message, LLMConfig } from '../core/types';
+import { safeJsonParse } from '../utils/security';
 
 /**
  * LLM 提供者基类
@@ -312,7 +313,8 @@ export class LocalModelProvider extends LLMProvider {
       const lines = decoder.decode(value).split('\n').filter(Boolean);
       for (const line of lines) {
         try {
-          const data = JSON.parse(line);
+          // 使用安全的 JSON 解析
+          const data = safeJsonParse<{ message?: { content?: string } }>(line, {});
           const token = data.message?.content || '';
           if (token) {
             fullContent += token;

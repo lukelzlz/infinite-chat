@@ -100,3 +100,53 @@ src/
 - `mem0ai`: Mem0 SDK (未安装时自动使用本地模式)
 - `chromadb`: 向量数据库
 - `ioredis`: Redis 客户端
+
+## 安全工具模組
+
+項目包含 `src/utils/security.ts` 安全工具模組，提供以下功能：
+
+### URL 驗證（SSRF 防護）
+```typescript
+import { validateUrl } from './utils/security';
+
+const result = validateUrl(url, {
+  allowPrivateIp: false,  // 是否允許訪問私有 IP
+  allowedHosts: [],       // 域名白名單
+  blockedHosts: [],       // 域名黑名單
+});
+```
+
+### 安全 JSON 解析（防止原型污染）
+```typescript
+import { safeJsonParse } from './utils/security';
+
+const data = safeJsonParse<MyType>(jsonString, defaultValue);
+```
+
+### 加密安全的隨機 ID
+```typescript
+import { generateSecureId, generateUuid } from './utils/security';
+
+const id = generateSecureId(16);  // 16 字符隨機 ID
+const uuid = generateUuid();       // UUID v4
+```
+
+### 路徑驗證（防止路徑遍歷）
+```typescript
+import { validateFilePath } from './utils/security';
+
+const result = validateFilePath(filePath, ['/allowed/dir']);
+```
+
+### HTML 清理
+```typescript
+import { sanitizeHtml } from './utils/security';
+
+const cleanText = sanitizeHtml(htmlString);
+```
+
+### 使用注意事項
+- 所有 JSON 解析應使用 `safeJsonParse` 而非 `JSON.parse`
+- URL 應在傳遞給外部服務前使用 `validateUrl` 驗證
+- 生成 ID 時使用 `generateSecureId` 而非 `Math.random()`
+

@@ -4,9 +4,10 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { PlatformAdapter } from './base';
 import { IncomingMessage } from '../core/types';
 import path from 'path';
+import { generateSecureId, safeJsonParse } from '../utils/security';
 
 interface WebMessage {
-  type: 'message' | 'config' | 'status';
+  type: 'message' | 'config' | 'status' | 'ping';
   data: any;
 }
 
@@ -14,6 +15,7 @@ interface ConnectedClient {
   ws: WebSocket;
   sessionId: string;
   userId: string;
+  lastActivity: number;
 }
 
 /**
@@ -26,7 +28,7 @@ interface ConnectedClient {
  */
 export class WebAdapter extends PlatformAdapter {
   name = 'web';
-  
+
   private port: number;
   private app: express.Application;
   private server: ReturnType<typeof createServer> | null = null;
@@ -34,6 +36,12 @@ export class WebAdapter extends PlatformAdapter {
   private messageCallback: ((msg: IncomingMessage) => Promise<void>) | null = null;
   private clients: Map<string, ConnectedClient> = new Map();
   private engine: any = null;
+
+  // 安全配置
+  private readonly MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB
+  private readonly CLIENT_TIMEOUT = 5 * 60 * 1000; // 5 分鐘無活動超時
+  private readonly MAX_CLIENTS = 1000; // 最大客戶端連接數
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config: {
     port?: number;
@@ -49,12 +57,20 @@ export class WebAdapter extends PlatformAdapter {
    * 设置 Express 路由
    */
   private setupRoutes(staticDir?: string): void {
-    this.app.use(express.json());
-    
+    this.app.use(express.json({ limit: '1mb' })); // 限制 JSON 請求大小
+
+    // 安全標頭
+    this.app.use((req, res, next) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('X-XSS-Protection', '1; mode=block');
+      next();
+    });
+
     // 静态文件
     const webDir = staticDir || path.join(__dirname, '../webui');
     this.app.use(express.static(webDir));
-    
+
     // API 路由
     this.app.get('/api/status', (req, res) => {
       res.json({
@@ -91,13 +107,19 @@ export class WebAdapter extends PlatformAdapter {
       try {
         // 创建 HTTP 服务器
         this.server = createServer(this.app);
-        
-        // 创建 WebSocket 服务器
-        this.wss = new WebSocketServer({ server: this.server });
-        
+
+        // 创建 WebSocket 服务器（添加大小限制）
+        this.wss = new WebSocketServer({
+          server: this.server,
+          maxPayload: this.MAX_MESSAGE_SIZE, // 限制消息大小
+        });
+
         this.wss.on('connection', (ws, req) => {
           this.handleConnection(ws, req);
         });
+
+        // 啟動清理定時器
+        this.startCleanupTimer();
 
         this.server.listen(this.port, () => {
           console.log(`[Web] Server started at http://localhost:${this.port}`);
@@ -111,6 +133,12 @@ export class WebAdapter extends PlatformAdapter {
 
   async stop(): Promise<void> {
     return new Promise((resolve) => {
+      // 停止清理定時器
+      if (this.cleanupInterval) {
+        clearInterval(this.cleanupInterval);
+        this.cleanupInterval = null;
+      }
+
       // 关闭所有客户端连接
       for (const [id, client] of this.clients) {
         client.ws.close();
@@ -139,7 +167,15 @@ export class WebAdapter extends PlatformAdapter {
    * 处理 WebSocket 连接
    */
   private handleConnection(ws: WebSocket, req: any): void {
-    const clientId = this.generateClientId();
+    // 檢查最大連接數
+    if (this.clients.size >= this.MAX_CLIENTS) {
+      console.warn('[Web] Maximum clients reached, rejecting connection');
+      ws.close(1013, 'Server busy');
+      return;
+    }
+
+    // 使用加密安全的隨機 ID
+    const clientId = generateSecureId(16);
     const userId = `web-${clientId}`;
     const sessionId = this.formatSessionId('web', userId);
 
@@ -150,6 +186,7 @@ export class WebAdapter extends PlatformAdapter {
       ws,
       sessionId,
       userId,
+      lastActivity: Date.now(),
     });
 
     // 发送欢迎消息
@@ -175,7 +212,7 @@ export class WebAdapter extends PlatformAdapter {
 
     // 处理错误
     ws.on('error', (error) => {
-      console.error(`[Web] Client error: ${clientId}`, error);
+      console.error(`[Web] Client error: ${clientId}`, error.message);
       this.clients.delete(clientId);
     });
   }
@@ -187,18 +224,54 @@ export class WebAdapter extends PlatformAdapter {
     const client = this.clients.get(clientId);
     if (!client || !this.messageCallback) return;
 
+    // 更新活動時間
+    client.lastActivity = Date.now();
+
     try {
-      const message: WebMessage = JSON.parse(data.toString());
+      // 使用安全的 JSON 解析
+      const parsed = safeJsonParse<Partial<WebMessage> | null>(
+        data.toString(),
+        null
+      );
+
+      if (!parsed || !parsed.type) {
+        console.warn(`[Web] Invalid JSON from client ${clientId}`);
+        return;
+      }
+
+      const message = parsed as WebMessage;
+
+      // 驗證消息類型
+      if (!['message', 'config', 'status', 'ping'].includes(message.type)) {
+        console.warn(`[Web] Unknown message type from client ${clientId}: ${message.type}`);
+        return;
+      }
+
+      // 處理 ping 心跳
+      if (message.type === 'ping') {
+        this.sendToClient(client.ws, { type: 'status', data: { pong: true } });
+        return;
+      }
 
       switch (message.type) {
         case 'message':
+          // 驗證消息內容
+          if (!message.data || typeof message.data.content !== 'string') {
+            console.warn(`[Web] Invalid message content from client ${clientId}`);
+            return;
+          }
+
+          // 限制消息長度
+          const maxContentLength = 10000;
+          const content = message.data.content.slice(0, maxContentLength);
+
           // 处理聊天消息
           await this.messageCallback({
             sessionId: client.sessionId,
-            content: message.data.content,
+            content,
             sender: {
               id: client.userId,
-              name: message.data.name || `User-${clientId.slice(0, 4)}`,
+              name: (typeof message.data.name === 'string' ? message.data.name.slice(0, 50) : `User-${clientId.slice(0, 4)}`),
               isBot: false,
             },
             metadata: {
@@ -213,7 +286,7 @@ export class WebAdapter extends PlatformAdapter {
           break;
       }
     } catch (e) {
-      console.error('[Web] Failed to handle message:', e);
+      console.error('[Web] Failed to handle message:', (e as Error).message);
     }
   }
 
@@ -264,10 +337,19 @@ export class WebAdapter extends PlatformAdapter {
   }
 
   /**
-   * 生成客户端 ID
+   * 启动清理定时器（清理超时客户端）
    */
-  private generateClientId(): string {
-    return Math.random().toString(36).substring(2, 10);
+  private startCleanupTimer(): void {
+    this.cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [id, client] of this.clients) {
+        if (now - client.lastActivity > this.CLIENT_TIMEOUT) {
+          console.log(`[Web] Client timeout: ${id}`);
+          client.ws.close(1001, 'Timeout');
+          this.clients.delete(id);
+        }
+      }
+    }, 60000); // 每分鐘檢查一次
   }
 
   /**
