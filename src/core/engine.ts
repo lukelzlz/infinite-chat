@@ -135,35 +135,36 @@ export class ChatBotEngine {
     try {
       // 获取或创建会话
       const session = this.getOrCreateSession(sessionId, incoming);
-      
+
+      // 获取适配器（声明一次，复用）
+      const adapter = this.adapters.get(session.platform);
+
       // 获取或创建用户
       const user = this.permissionManager.getOrCreateUser(session.platform, session.userId);
-      
+
       // 检查用户是否被封禁
       if (user.banned) {
         if (user.banExpiresAt && user.banExpiresAt < Date.now()) {
           this.permissionManager.unbanUser(session.platform, session.userId);
         } else {
           console.log(`[Engine] User ${session.userId} is banned`);
-          const adapter = this.adapters.get(session.platform);
           if (adapter) {
             await adapter.sendMessage(sessionId, `你已被封禁: ${user.banReason || '无原因'}`);
           }
           return;
         }
       }
-      
+
       // 检查权限
       if (!this.permissionManager.hasPermission(user, 'chat')) {
         console.log(`[Engine] User ${session.userId} has no chat permission`);
         return;
       }
-      
+
       // 检查频率限制
       const rateLimitResult = this.permissionManager.checkRateLimit(user);
       if (!rateLimitResult.allowed) {
         console.log(`[Engine] Rate limit hit for ${session.userId}`);
-        const adapter = this.adapters.get(session.platform);
         if (adapter) {
           await adapter.sendMessage(sessionId, `${rateLimitResult.reason}，请 ${rateLimitResult.retryAfter} 秒后再试。`);
         }
@@ -171,7 +172,6 @@ export class ChatBotEngine {
       }
 
       // 发送 typing 状态
-      const adapter = this.adapters.get(session.platform);
       if (adapter && 'sendTyping' in adapter) {
         (adapter as any).sendTyping(sessionId).catch(() => {});
       }
@@ -179,7 +179,6 @@ export class ChatBotEngine {
       // 检查是否是插件命令
       const pluginResult = await this.pluginManager.processMessage(content, session);
       if (pluginResult) {
-        const adapter = this.adapters.get(session.platform);
         if (adapter) {
           await adapter.sendMessage(sessionId, pluginResult);
         }
@@ -236,7 +235,6 @@ export class ChatBotEngine {
       });
 
       // 发送回复
-      const adapter = this.adapters.get(session.platform);
       if (adapter) {
         // 如果是群聊且启用了多 Agent，可能需要链式回复
         if (session.groupId && this.agentManager?.getGroupChatConfig().agentInteraction) {
@@ -257,11 +255,11 @@ export class ChatBotEngine {
       console.error(`[Engine] Error processing message:`, e);
       console.error(`[Engine] Error stack:`, e?.stack);
       console.error(`[Engine] Session: ${sessionId}, Platform: ${sessionId.split(':')[0]}`);
-      
-      const adapter = this.adapters.get(sessionId.split(':')[0]);
-      if (adapter) {
+
+      const errorAdapter = this.adapters.get(sessionId.split(':')[0]);
+      if (errorAdapter) {
         try {
-          await adapter.sendMessage(sessionId, `抱歉，处理消息时出错: ${e?.message || '未知错误'}`);
+          await errorAdapter.sendMessage(sessionId, `抱歉，处理消息时出错: ${e?.message || '未知错误'}`);
         } catch (sendError) {
           console.error(`[Engine] Failed to send error message:`, sendError);
         }

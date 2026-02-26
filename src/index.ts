@@ -124,3 +124,11 @@ export async function quickStart(configPath?: string): Promise<ChatBotEngine> {
   await engine.start();
   return engine;
 }
+
+// 主入口：当直接运行时启动
+if (require.main === module) {
+  quickStart().catch((err) => {
+    console.error('Failed to start:', err);
+    process.exit(1);
+  });
+}
