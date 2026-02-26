@@ -6,15 +6,10 @@ import { AgentManager } from './agents';
 import { LLMProvider, createLLMProvider } from '../llm';
 import { PlatformAdapter } from '../adapters/base';
 import { Plugin, PluginManager } from '../plugins';
+import { PermissionManager, getPermissionManager } from '../permission';
 
 /**
  * 聊天机器人引擎
- * 
- * 核心功能：
- * - 多平台消息路由
- * - 无限上下文（Mem0 + 滑动窗口）
- * - 多用户会话隔离
- * - 插件系统
  */
 export class ChatBotEngine {
   private config: FrameworkConfig;
@@ -24,6 +19,7 @@ export class ChatBotEngine {
   private memoryManager: HybridMemoryManager;
   private agentManager?: AgentManager;
   private pluginManager: PluginManager;
+  private permissionManager: PermissionManager;
   private sessions: Map<string, Session> = new Map();
   private isRunning = false;
 
@@ -49,6 +45,9 @@ export class ChatBotEngine {
     
     // 初始化插件管理器
     this.pluginManager = new PluginManager();
+    
+    // 初始化权限管理器
+    this.permissionManager = getPermissionManager();
   }
 
   /**
@@ -136,6 +135,41 @@ export class ChatBotEngine {
     try {
       // 获取或创建会话
       const session = this.getOrCreateSession(sessionId, incoming);
+      
+      // 获取或创建用户
+      const user = this.permissionManager.getOrCreateUser(session.platform, session.userId);
+      
+      // 检查用户是否被封禁
+      if (user.banned) {
+        // 检查封禁是否过期
+        if (user.banExpiresAt && user.banExpiresAt < Date.now()) {
+          this.permissionManager.unbanUser(session.platform, session.userId);
+        } else {
+          console.log(`[Engine] User ${session.userId} is banned`);
+          const adapter = this.adapters.get(session.platform);
+          if (adapter) {
+            await adapter.sendMessage(sessionId, `你已被封禁: ${user.banReason || '无原因'}`);
+          }
+          return;
+        }
+      }
+      
+      // 检查权限
+      if (!this.permissionManager.hasPermission(user, 'chat')) {
+        console.log(`[Engine] User ${session.userId} has no chat permission`);
+        return;
+      }
+      
+      // 检查频率限制
+      const rateLimitResult = this.permissionManager.checkRateLimit(user);
+      if (!rateLimitResult.allowed) {
+        console.log(`[Engine] Rate limit hit for ${session.userId}`);
+        const adapter = this.adapters.get(session.platform);
+        if (adapter) {
+          await adapter.sendMessage(sessionId, `${rateLimitResult.reason}，请 ${rateLimitResult.retryAfter} 秒后再试。`);
+        }
+        return;
+      }
 
       // 检查是否是插件命令
       const pluginResult = await this.pluginManager.processMessage(content, session);
@@ -364,6 +398,37 @@ export class ChatBotEngine {
       agents: this.agentManager?.getAllAgents().length || 0,
     };
   }
+
+  /**
+   * 获取权限管理器
+   */
+  getPermissionManager(): PermissionManager {
+    return this.permissionManager;
+  }
+
+  /**
+   * 获取配置
+   */
+  getConfig(): FrameworkConfig {
+    return this.config;
+  }
+
+  /**
+   * 更新配置
+   */
+  updateConfig(partial: Partial<FrameworkConfig>): void {
+    this.config = { ...this.config, ...partial };
+  }
+
+  /**
+   * 更新 LLM 配置
+   */
+  updateLLMConfig(llmConfig: Partial<FrameworkConfig['llm']>): void {
+    this.config.llm = { ...this.config.llm, ...llmConfig };
+    // 重新创建 LLM Provider
+    this.llmProvider = createLLMProvider(this.config.llm);
+    console.log(`[Engine] LLM config updated: ${this.config.llm.model}`);
+  }
 }
 
 // 导出
@@ -371,3 +436,4 @@ export { FrameworkConfig, Message, IncomingMessage, Session, Agent } from './typ
 export { ContextManager } from './context';
 export { HybridMemoryManager } from './memory';
 export { AgentManager } from './agents';
+export { PermissionManager } from '../permission';
