@@ -18,7 +18,20 @@ export { LLMProvider, OpenAIProvider, AnthropicProvider, LocalModelProvider } fr
 export { Plugin, PluginManager, EchoPlugin, HelpPlugin, StatsPlugin } from './plugins';
 export { ContextManager } from './core/context';
 export { HybridMemoryManager, Mem0Manager } from './core/memory';
-export type { FrameworkConfig, Message, IncomingMessage, Session, Agent, GroupChatConfig } from './core/types';
+export { ConfigManager, getConfigManager, initConfigManager } from './core/config';
+export type { FrameworkConfig, Message, IncomingMessage, Session, Agent, GroupChatConfig, LLMAdvancedParams, ConfigChangeEvent } from './core/types';
+
+// 角色卡系统
+export { CharacterManager, getCharacterManager, initCharacterManager } from './character';
+export type { CharacterCard, CharacterBook, CharacterBookEntry, CharacterImportResult, CharacterExportOptions } from './character';
+
+// 权限管理
+export { PermissionManager, getPermissionManager, PermissionLevel, DEFAULT_ROLE_PERMISSIONS } from './permission';
+export type { Permission, RolePermissions, UserInfo } from './permission';
+
+// 指令系统
+export { CommandSystem, getCommandSystem, initCommandSystem } from './command';
+export type { CommandDefinition, CommandArgument, CommandContext, CommandHandler } from './command';
 
 /**
  * 从配置文件创建引擎
