@@ -8,6 +8,7 @@ import { PlatformAdapter } from '../adapters/base';
 import { Plugin, PluginManager } from '../plugins';
 import { PermissionManager, getPermissionManager } from '../permission';
 import { generateSecureId } from '../utils/security';
+import { RAGService, getRAGService } from '../rag';
 
 /**
  * 聊天机器人引擎

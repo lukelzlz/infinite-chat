@@ -435,6 +435,104 @@ export class WebAdapter extends PlatformAdapter {
       }
     });
 
+    // ============ RAG 文档 API ============
+
+    // 上传文档
+    this.app.post('/api/rag/upload', this.authMiddleware.bind(this), async (req, res) => {
+      try {
+        const { getRAGService } = await import('../rag');
+        const rag = getRAGService();
+        
+        const { content, filename } = req.body;
+        
+        if (!content) {
+          res.json({ error: 'Content is required' });
+          return;
+        }
+        
+        const doc = await rag.uploadDocument(content, filename || 'document.txt');
+        
+        res.json({ 
+          success: true, 
+          document: {
+            id: doc.id,
+            filename: doc.filename,
+            chunks: doc.chunks.length,
+            size: doc.metadata.size,
+          }
+        });
+      } catch (e: any) {
+        res.json({ error: e.message });
+      }
+    });
+
+    // 列出文档
+    this.app.get('/api/rag/documents', async (req, res) => {
+      try {
+        const { getRAGService } = await import('../rag');
+        const rag = getRAGService();
+        
+        const docs = rag.listDocuments().map(doc => ({
+          id: doc.id,
+          filename: doc.filename,
+          chunks: doc.chunks.length,
+          size: doc.metadata.size,
+          uploadedAt: doc.metadata.uploadedAt,
+        }));
+        
+        res.json({ documents: docs });
+      } catch (e: any) {
+        res.json({ error: e.message, documents: [] });
+      }
+    });
+
+    // 删除文档
+    this.app.delete('/api/rag/documents/:id', this.authMiddleware.bind(this), async (req, res) => {
+      try {
+        const { getRAGService } = await import('../rag');
+        const rag = getRAGService();
+        
+        const success = rag.deleteDocument(req.params.id);
+        res.json({ success });
+      } catch (e: any) {
+        res.json({ error: e.message, success: false });
+      }
+    });
+
+    // 搜索文档
+    this.app.get('/api/rag/search', async (req, res) => {
+      try {
+        const { getRAGService } = await import('../rag');
+        const rag = getRAGService();
+        
+        const query = req.query.q as string;
+        const topK = parseInt(req.query.topK as string) || 5;
+        
+        if (!query) {
+          res.json({ results: [] });
+          return;
+        }
+        
+        const results = rag.search(query, topK);
+        res.json({ results });
+      } catch (e: any) {
+        res.json({ error: e.message, results: [] });
+      }
+    });
+
+    // RAG 统计
+    this.app.get('/api/rag/stats', async (req, res) => {
+      try {
+        const { getRAGService } = await import('../rag');
+        const rag = getRAGService();
+        
+        const stats = rag.getStats();
+        res.json(stats);
+      } catch (e: any) {
+        res.json({ error: e.message });
+      }
+    });
+
     // SPA 回退
     this.app.get('*', (req, res) => {
       res.sendFile(path.join(webDir, 'index.html'));

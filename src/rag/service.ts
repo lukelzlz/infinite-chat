@@ -1,0 +1,147 @@
+import { DocumentProcessor, SimpleVectorStore, Document } from './document';
+import { Message } from '../core/types';
+import { LLMProvider } from '../llm';
+
+/**
+ * RAG 服务
+ */
+export class RAGService {
+  private processor: DocumentProcessor;
+  private store: SimpleVectorStore;
+
+  constructor(options?: { chunkSize?: number; chunkOverlap?: number }) {
+    this.processor = new DocumentProcessor(options);
+    this.store = new SimpleVectorStore();
+  }
+
+  /**
+   * 上传文档
+   */
+  async uploadDocument(content: string, filename: string): Promise<Document> {
+    const doc = await this.processor.processText(content, filename);
+    this.store.addDocument(doc);
+    console.log(`[RAG] Document uploaded: ${filename} (${doc.chunks.length} chunks)`);
+    return doc;
+  }
+
+  /**
+   * 从文件上传
+   */
+  async uploadFile(filePath: string): Promise<Document> {
+    const doc = await this.processor.loadFile(filePath);
+    this.store.addDocument(doc);
+    console.log(`[RAG] File uploaded: ${doc.filename}`);
+    return doc;
+  }
+
+  /**
+   * 删除文档
+   */
+  deleteDocument(docId: string): boolean {
+    return this.store.deleteDocument(docId);
+  }
+
+  /**
+   * 列出文档
+   */
+  listDocuments(): Document[] {
+    return this.store.listDocuments();
+  }
+
+  /**
+   * 搜索相关内容
+   */
+  search(query: string, topK: number = 5): Array<{ content: string; source: string; score: number }> {
+    const results = this.store.search(query, topK);
+    
+    return results.map(r => ({
+      content: r.chunk.content,
+      source: r.chunk.metadata.source,
+      score: r.score,
+    }));
+  }
+
+  /**
+   * 构建带上下文的 Prompt
+   */
+  buildContextPrompt(query: string, topK: number = 5): string {
+    const results = this.search(query, topK);
+    
+    if (results.length === 0) {
+      return query;
+    }
+
+    const context = results
+      .map((r, i) => `[${i + 1}] ${r.content}`)
+      .join('\n\n');
+
+    return `以下是与问题相关的参考资料：
+
+${context}
+
+---
+
+基于以上资料，请回答：${query}`;
+  }
+
+  /**
+   * 获取统计信息
+   */
+  getStats(): {
+    documentCount: number;
+    totalChunks: number;
+    totalCharacters: number;
+  } {
+    return this.store.getStats();
+  }
+
+  /**
+   * 带 RAG 的对话
+   */
+  async chatWithRAG(
+    messages: Message[],
+    query: string,
+    llm: LLMProvider,
+    options?: { topK?: number; systemPrompt?: string }
+  ): Promise<string> {
+    // 搜索相关内容
+    const results = this.search(query, options?.topK || 5);
+
+    if (results.length === 0) {
+      // 没有相关内容，直接对话
+      return llm.chat(messages, { systemPrompt: options?.systemPrompt });
+    }
+
+    // 构建带上下文的消息
+    const context = results
+      .map((r, i) => `【参考资料${i + 1}】\n${r.content}`)
+      .join('\n\n');
+
+    const enhancedMessages = [...messages];
+    
+    // 添加系统消息
+    const systemPrompt = (options?.systemPrompt || '') + `
+
+你有一个知识库可以参考。当用户问问题时，我会提供相关的参考资料。请基于这些资料回答问题，如果资料中没有相关信息，请诚实地说明。
+
+参考资料：
+${context}`;
+
+    return llm.chat(enhancedMessages, { systemPrompt });
+  }
+}
+
+// 全局实例
+let globalRAGService: RAGService | null = null;
+
+export function getRAGService(): RAGService {
+  if (!globalRAGService) {
+    globalRAGService = new RAGService();
+  }
+  return globalRAGService;
+}
+
+export function initRAGService(options?: { chunkSize?: number; chunkOverlap?: number }): RAGService {
+  globalRAGService = new RAGService(options);
+  return globalRAGService;
+}

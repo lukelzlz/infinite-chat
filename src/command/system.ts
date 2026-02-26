@@ -433,12 +433,117 @@ export class CommandSystem {
       const input = ctx.args._ as string;
       
       if (!input) {
-        // TODO: 显示当前配置
         return '配置管理功能开发中';
       }
       
-      // TODO: 实现配置修改
       return '配置已更新';
+    });
+
+    // ============ RAG 文档指令 ============
+
+    // 上传文档
+    this.register({
+      name: 'upload',
+      description: '上传文本文档到知识库',
+      usage: '<文本内容>',
+      permission: 'create_character',
+      group: 'rag',
+    }, async (ctx) => {
+      const { getRAGService } = await import('../rag');
+      const rag = getRAGService();
+      
+      const content = ctx.args._rest || (ctx.args._ as string);
+      
+      if (!content || content.length < 50) {
+        return '请提供要上传的文本内容（至少50字符）';
+      }
+      
+      try {
+        const doc = await rag.uploadDocument(content, 'user-upload.txt');
+        return `文档上传成功！\n- ID: ${doc.id}\n- 分块数: ${doc.chunks.length}\n- 大小: ${doc.content.length} 字符`;
+      } catch (e: any) {
+        return `上传失败: ${e.message}`;
+      }
+    });
+
+    // 搜索文档
+    this.register({
+      name: 'search',
+      aliases: ['查找', '搜索文档'],
+      description: '在知识库中搜索内容',
+      usage: '<关键词>',
+      group: 'rag',
+    }, async (ctx) => {
+      const { getRAGService } = await import('../rag');
+      const rag = getRAGService();
+      
+      const query = ctx.args._rest || (ctx.args._ as string);
+      
+      if (!query) {
+        return '请提供搜索关键词';
+      }
+      
+      const results = rag.search(query, 3);
+      
+      if (results.length === 0) {
+        return '未找到相关内容';
+      }
+      
+      const output = results.map((r, i) => 
+        `[${i + 1}] ${r.content.slice(0, 200)}${r.content.length > 200 ? '...' : ''}\n(来源: ${r.source}, 相关度: ${(r.score * 100).toFixed(0)}%)`
+      ).join('\n\n');
+      
+      return `找到 ${results.length} 条相关内容:\n\n${output}`;
+    });
+
+    // 列出文档
+    this.register({
+      name: 'documents',
+      aliases: ['文档列表', 'docs'],
+      description: '列出知识库中的所有文档',
+      group: 'rag',
+    }, async (ctx) => {
+      const { getRAGService } = await import('../rag');
+      const rag = getRAGService();
+      
+      const docs = rag.listDocuments();
+      const stats = rag.getStats();
+      
+      if (docs.length === 0) {
+        return '知识库为空，使用 /upload 上传文档';
+      }
+      
+      const list = docs.map((doc, i) => 
+        `${i + 1}. ${doc.filename} (${doc.chunks.length} 块, ${doc.content.length} 字符)`
+      ).join('\n');
+      
+      return `知识库统计:\n- 文档数: ${stats.documentCount}\n- 总分块: ${stats.totalChunks}\n- 总字符: ${stats.totalCharacters}\n\n文档列表:\n${list}`;
+    });
+
+    // 删除文档
+    this.register({
+      name: 'deletedoc',
+      description: '从知识库删除文档',
+      usage: '<文档ID>',
+      permission: 'delete_character',
+      group: 'rag',
+    }, async (ctx) => {
+      const { getRAGService } = await import('../rag');
+      const rag = getRAGService();
+      
+      const docId = ctx.args._rest || (ctx.args._ as string);
+      
+      if (!docId) {
+        return '请提供文档ID';
+      }
+      
+      const success = rag.deleteDocument(docId);
+      
+      if (success) {
+        return `文档 ${docId} 已删除`;
+      } else {
+        return `文档 ${docId} 不存在`;
+      }
     });
   }
 }
