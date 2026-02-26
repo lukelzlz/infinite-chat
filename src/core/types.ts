@@ -65,12 +65,23 @@ export interface IncomingMessage {
 
 /** LLM 配置 */
 export interface LLMConfig {
-  provider: 'openai' | 'anthropic' | 'local' | 'siliconflow' | 'openai-compatible';
+  provider: 'openai' | 'anthropic' | 'local' | 'siliconflow' | 'openai-compatible' | 'custom';
   model: string;
   apiKey?: string;
   baseUrl?: string;
   maxTokens?: number;
   temperature?: number;
+  /** 自定义模型预设名称 */
+  preset?: string;
+}
+
+/** 自定义模型配置 */
+export interface CustomModelConfig {
+  baseUrl: string;
+  model: string;
+  description?: string;
+  /** 额外参数 */
+  extraParams?: Record<string, any>;
 }
 
 /** 记忆配置 */
