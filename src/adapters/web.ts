@@ -220,6 +220,109 @@ export class WebAdapter extends PlatformAdapter {
       }
     });
 
+    // 记忆可视化页面
+    this.app.get('/memory', (req, res) => {
+      res.sendFile(path.join(webDir, 'memory.html'));
+    });
+
+    // 记忆可视化 API
+    this.app.get('/api/memory/graph', async (req, res) => {
+      try {
+        const { MemoryVisualizationService } = await import('../memory/visualization');
+        const { HybridMemoryManager, Mem0Manager } = await import('../core/memory');
+        
+        // 简单实现：使用默认配置
+        const mem0Config = { localMode: true };
+        const memoryManager = new HybridMemoryManager(mem0Config, 10);
+        const vizService = new MemoryVisualizationService(memoryManager);
+        
+        const userId = (req.query.userId as string) || 'default';
+        const graph = await vizService.getMemoryGraph(userId);
+        
+        res.json(graph);
+      } catch (e: any) {
+        res.json({ error: e.message, nodes: [], edges: [], stats: { totalMemories: 0, byType: {}, oldestMemory: 0, newestMemory: 0, avgImportance: 0 } });
+      }
+    });
+
+    this.app.get('/api/memory/timeline', async (req, res) => {
+      try {
+        const { MemoryVisualizationService } = await import('../memory/visualization');
+        const { HybridMemoryManager, Mem0Manager } = await import('../core/memory');
+        
+        const mem0Config = { localMode: true };
+        const memoryManager = new HybridMemoryManager(mem0Config, 10);
+        const vizService = new MemoryVisualizationService(memoryManager);
+        
+        const userId = (req.query.userId as string) || 'default';
+        const timeline = await vizService.getMemoryTimeline(userId);
+        
+        res.json({ timeline });
+      } catch (e: any) {
+        res.json({ error: e.message, timeline: [] });
+      }
+    });
+
+    this.app.get('/api/memory/heatmap', async (req, res) => {
+      try {
+        const { MemoryVisualizationService } = await import('../memory/visualization');
+        const { HybridMemoryManager, Mem0Manager } = await import('../core/memory');
+        
+        const mem0Config = { localMode: true };
+        const memoryManager = new HybridMemoryManager(mem0Config, 10);
+        const vizService = new MemoryVisualizationService(memoryManager);
+        
+        const userId = (req.query.userId as string) || 'default';
+        const heatmap = await vizService.getMemoryHeatmap(userId);
+        
+        res.json({ heatmap });
+      } catch (e: any) {
+        res.json({ error: e.message, heatmap: [] });
+      }
+    });
+
+    this.app.get('/api/memory/wordcloud', async (req, res) => {
+      try {
+        const { MemoryVisualizationService } = await import('../memory/visualization');
+        const { HybridMemoryManager, Mem0Manager } = await import('../core/memory');
+        
+        const mem0Config = { localMode: true };
+        const memoryManager = new HybridMemoryManager(mem0Config, 10);
+        const vizService = new MemoryVisualizationService(memoryManager);
+        
+        const userId = (req.query.userId as string) || 'default';
+        const wordcloud = await vizService.getMemoryWordCloud(userId);
+        
+        res.json({ wordcloud });
+      } catch (e: any) {
+        res.json({ error: e.message, wordcloud: [] });
+      }
+    });
+
+    this.app.get('/api/memory/search', async (req, res) => {
+      try {
+        const { MemoryVisualizationService } = await import('../memory/visualization');
+        const { HybridMemoryManager, Mem0Manager } = await import('../core/memory');
+        
+        const mem0Config = { localMode: true };
+        const memoryManager = new HybridMemoryManager(mem0Config, 10);
+        const vizService = new MemoryVisualizationService(memoryManager);
+        
+        const userId = (req.query.userId as string) || 'default';
+        const query = req.query.q as string;
+        
+        if (!query) {
+          res.json({ results: [] });
+          return;
+        }
+        
+        const results = await vizService.searchMemories(userId, query);
+        res.json({ results });
+      } catch (e: any) {
+        res.json({ error: e.message, results: [] });
+      }
+    });
+
     // SPA 回退
     this.app.get('*', (req, res) => {
       res.sendFile(path.join(webDir, 'index.html'));

@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>记忆可视化 - infinite-chat</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --bg-primary: #1a1a2e;
+      --bg-secondary: #16213e;
+      --bg-tertiary: #0f3460;
+      --accent: #e94560;
+      --accent-light: #ff6b6b;
+      --text-primary: #eee;
+      --text-secondary: #aaa;
+      --text-muted: #666;
+      --success: #4ade80;
+      --warning: #fbbf24;
+      --info: #60a5fa;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    
+    .header h1 {
+      color: var(--accent);
+      font-size: 1.5em;
+    }
+    
+    .back-btn {
+      color: var(--text-secondary);
+      text-decoration: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      background: var(--bg-secondary);
+      transition: all 0.2s;
+    }
+    
+    .back-btn:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    
+    .tab-btn {
+      padding: 10px 20px;
+      background: var(--bg-secondary);
+      border: none;
+      color: var(--text-secondary);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .tab-btn:hover {
+      background: var(--bg-tertiary);
+    }
+    
+    .tab-btn.active {
+      background: var(--accent);
+      color: white;
+    }
+    
+    .tab-panel {
+      display: none;
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      padding: 20px;
+      min-height: 500px;
+    }
+    
+    .tab-panel.active {
+      display: block;
+    }
+    
+    /* 统计卡片 */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    
+    .stat-card {
+      background: var(--bg-tertiary);
+      border-radius: 10px;
+      padding: 15px;
+    }
+    
+    .stat-value {
+      font-size: 2em;
+      font-weight: bold;
+      color: var(--accent);
+    }
+    
+    .stat-label {
+      color: var(--text-secondary);
+      font-size: 0.9em;
+      margin-top: 5px;
+    }
+    
+    /* 图形容器 */
+    .chart-container {
+      width: 100%;
+      height: 400px;
+      position: relative;
+    }
+    
+    /* 网络图 */
+    #graph-canvas {
+      width: 100%;
+      height: 400px;
+      background: var(--bg-primary);
+      border-radius: 8px;
+    }
+    
+    /* 热力图 */
+    .heatmap {
+      display: grid;
+      grid-template-columns: 50px repeat(24, 1fr);
+      gap: 2px;
+    }
+    
+    .heatmap-label {
+      font-size: 0.7em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .heatmap-cell {
+      aspect-ratio: 1;
+      border-radius: 2px;
+      background: var(--bg-tertiary);
+      transition: all 0.2s;
+    }
+    
+    .heatmap-cell:hover {
+      transform: scale(1.2);
+      z-index: 1;
+    }
+    
+    /* 时间线 */
+    .timeline {
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    
+    .timeline-item {
+      display: flex;
+      gap: 15px;
+      padding: 15px 0;
+      border-bottom: 1px solid var(--bg-tertiary);
+    }
+    
+    .timeline-date {
+      width: 100px;
+      font-size: 0.9em;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+    
+    .timeline-content {
+      flex: 1;
+    }
+    
+    .timeline-memories {
+      margin-top: 10px;
+    }
+    
+    .memory-tag {
+      display: inline-block;
+      padding: 4px 8px;
+      margin: 2px;
+      background: var(--bg-tertiary);
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+    
+    .memory-tag.preference { border-left: 3px solid var(--accent); }
+    .memory-tag.fact { border-left: 3px solid var(--info); }
+    .memory-tag.emotion { border-left: 3px solid var(--warning); }
+    .memory-tag.event { border-left: 3px solid var(--success); }
+    
+    /* 词云 */
+    .wordcloud {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+      min-height: 300px;
+    }
+    
+    .word-item {
+      display: inline-block;
+      padding: 5px 10px;
+      background: var(--bg-tertiary);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .word-item:hover {
+      background: var(--accent);
+      transform: scale(1.1);
+    }
+    
+    /* 搜索 */
+    .search-box {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    
+    .search-box input {
+      flex: 1;
+      padding: 12px 16px;
+      background: var(--bg-primary);
+      border: 1px solid var(--bg-tertiary);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 1em;
+    }
+    
+    .search-box input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    
+    .search-box button {
+      padding: 12px 24px;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      cursor: pointer;
+    }
+    
+    .search-results {
+      margin-top: 20px;
+    }
+    
+    .search-result {
+      padding: 15px;
+      background: var(--bg-tertiary);
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    
+    .search-result-content {
+      margin-bottom: 8px;
+    }
+    
+    .search-result-meta {
+      font-size: 0.8em;
+      color: var(--text-muted);
+    }
+    
+    /* 加载动画 */
+    .loading {
+      text-align: center;
+      padding: 50px;
+      color: var(--text-muted);
+    }
+    
+    .loading::after {
+      content: '...';
+      animation: dots 1.5s infinite;
+    }
+    
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
+    }
+    
+    /* 滚动条 */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-primary); }
+    ::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🧠 记忆可视化</h1>
+    <a href="/" class="back-btn">← 返回聊天</a>
+  </div>
+  
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="graph">知识图谱</button>
+    <button class="tab-btn" data-tab="timeline">时间线</button>
+    <button class="tab-btn" data-tab="heatmap">活跃热力图</button>
+    <button class="tab-btn" data-tab="wordcloud">词云</button>
+    <button class="tab-btn" data-tab="search">搜索</button>
+  </div>
+  
+  <!-- 统计卡片 -->
+  <div class="stats-grid" id="stats">
+    <div class="stat-card">
+      <div class="stat-value" id="totalMemories">-</div>
+      <div class="stat-label">总记忆数</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="avgImportance">-</div>
+      <div class="stat-label">平均重要性</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="oldestMemory">-</div>
+      <div class="stat-label">最早记忆</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="newestMemory">-</div>
+      <div class="stat-label">最新记忆</div>
+    </div>
+  </div>
+  
+  <!-- 知识图谱 -->
+  <div class="tab-panel active" id="graph-panel">
+    <canvas id="graph-canvas"></canvas>
+  </div>
+  
+  <!-- 时间线 -->
+  <div class="tab-panel" id="timeline-panel">
+    <div class="timeline" id="timeline"></div>
+  </div>
+  
+  <!-- 热力图 -->
+  <div class="tab-panel" id="heatmap-panel">
+    <div class="heatmap" id="heatmap"></div>
+  </div>
+  
+  <!-- 词云 -->
+  <div class="tab-panel" id="wordcloud-panel">
+    <div class="wordcloud" id="wordcloud"></div>
+  </div>
+  
+  <!-- 搜索 -->
+  <div class="tab-panel" id="search-panel">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="搜索记忆...">
+      <button onclick="searchMemories()">搜索</button>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+
+  <script>
+    // 标签页切换
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(btn.dataset.tab + '-panel').classList.add('active');
+      });
+    });
+
+    // 加载记忆数据
+    async function loadMemoryGraph() {
+      try {
+        const res = await fetch('/api/memory/graph');
+        const data = await res.json();
+        
+        updateStats(data.stats);
+        drawGraph(data.nodes, data.edges);
+      } catch (e) {
+        console.error('Failed to load memory graph:', e);
+      }
+    }
+
+    // 更新统计
+    function updateStats(stats) {
+      document.getElementById('totalMemories').textContent = stats.totalMemories;
+      document.getElementById('avgImportance').textContent = (stats.avgImportance * 100).toFixed(0) + '%';
+      
+      if (stats.oldestMemory > 0) {
+        document.getElementById('oldestMemory').textContent = new Date(stats.oldestMemory).toLocaleDateString();
+      }
+      if (stats.newestMemory > 0) {
+        document.getElementById('newestMemory').textContent = new Date(stats.newestMemory).toLocaleDateString();
+      }
+    }
+
+    // 绘制知识图谱
+    function drawGraph(nodes, edges) {
+      const canvas = document.getElementById('graph-canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // 设置画布大小
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+      
+      if (nodes.length === 0) {
+        ctx.fillStyle = '#666';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('暂无记忆数据', canvas.width / 2, canvas.height / 2);
+        return;
+      }
+      
+      // 计算节点位置（简单的圆形布局）
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+      const radius = Math.min(centerX, centerY) - 50;
+      
+      nodes.forEach((node, i) => {
+        const angle = (2 * Math.PI * i) / nodes.length;
+        node.x = centerX + radius * Math.cos(angle);
+        node.y = centerY + radius * Math.sin(angle);
+      });
+      
+      // 绘制边
+      ctx.strokeStyle = 'rgba(233, 69, 96, 0.3)';
+      ctx.lineWidth = 1;
+      
+      edges.forEach(edge => {
+        const source = nodes.find(n => n.id === edge.source);
+        const target = nodes.find(n => n.id === edge.target);
+        
+        if (source && target) {
+          ctx.beginPath();
+          ctx.moveTo(source.x, source.y);
+          ctx.lineTo(target.x, target.y);
+          ctx.stroke();
+        }
+      });
+      
+      // 绘制节点
+      const colors = {
+        preference: '#e94560',
+        fact: '#60a5fa',
+        emotion: '#fbbf24',
+        event: '#4ade80',
+        user: '#888',
+      };
+      
+      nodes.forEach(node => {
+        const size = 5 + node.importance * 15;
+        
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
+        ctx.fillStyle = colors[node.type] || '#888';
+        ctx.fill();
+        
+        // 绘制标签
+        ctx.fillStyle = '#eee';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        const label = node.content.slice(0, 10) + (node.content.length > 10 ? '...' : '');
+        ctx.fillText(label, node.x, node.y + size + 12);
+      });
+      
+      // 绘制图例
+      const legendY = 20;
+      let legendX = 20;
+      
+      Object.entries(colors).forEach(([type, color]) => {
+        ctx.beginPath();
+        ctx.arc(legendX, legendY, 6, 0, 2 * Math.PI);
+        ctx.fillStyle = color;
+        ctx.fill();
+        
+        ctx.fillStyle = '#aaa';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(type, legendX + 10, legendY + 4);
+        
+        legendX += 80;
+      });
+    }
+
+    // 加载时间线
+    async function loadTimeline() {
+      try {
+        const res = await fetch('/api/memory/timeline');
+        const data = await res.json();
+        
+        const container = document.getElementById('timeline');
+        container.innerHTML = '';
+        
+        if (data.timeline.length === 0) {
+          container.innerHTML = '<div class="loading">暂无时间线数据</div>';
+          return;
+        }
+        
+        data.timeline.reverse().forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'timeline-item';
+          
+          const memoriesHtml = item.memories.map(m => 
+            `<span class="memory-tag ${m.type}">${m.content.slice(0, 30)}${m.content.length > 30 ? '...' : ''}</span>`
+          ).join('');
+          
+          div.innerHTML = `
+            <div class="timeline-date">${item.date}</div>
+            <div class="timeline-content">
+              <div>${item.count} 条记忆</div>
+              <div class="timeline-memories">${memoriesHtml}</div>
+            </div>
+          `;
+          
+          container.appendChild(div);
+        });
+      } catch (e) {
+        console.error('Failed to load timeline:', e);
+      }
+    }
+
+    // 加载热力图
+    async function loadHeatmap() {
+      try {
+        const res = await fetch('/api/memory/heatmap');
+        const data = await res.json();
+        
+        const container = document.getElementById('heatmap');
+        container.innerHTML = '';
+        
+        const days = ['日', '一', '二', '三', '四', '五', '六'];
+        
+        // 添加表头（小时）
+        container.appendChild(document.createElement('div')); // 空白
+        for (let h = 0; h < 24; h++) {
+          const label = document.createElement('div');
+          label.className = 'heatmap-label';
+          label.textContent = h;
+          container.appendChild(label);
+        }
+        
+        // 添加数据
+        const maxCount = Math.max(...data.heatmap.map(d => d.count), 1);
+        
+        for (let day = 0; day < 7; day++) {
+          // 星期标签
+          const dayLabel = document.createElement('div');
+          dayLabel.className = 'heatmap-label';
+          dayLabel.textContent = days[day];
+          container.appendChild(dayLabel);
+          
+          // 每小时数据
+          for (let hour = 0; hour < 24; hour++) {
+            const item = data.heatmap.find(d => d.hour === hour && d.day === day);
+            const cell = document.createElement('div');
+            cell.className = 'heatmap-cell';
+            
+            if (item && item.count > 0) {
+              const intensity = item.count / maxCount;
+              const r = Math.round(233 * intensity);
+              const g = Math.round(69 * intensity);
+              const b = Math.round(96 * intensity);
+              cell.style.background = `rgb(${r}, ${g}, ${b})`;
+              cell.title = `${item.count} 条记忆`;
+            }
+            
+            container.appendChild(cell);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load heatmap:', e);
+      }
+    }
+
+    // 加载词云
+    async function loadWordCloud() {
+      try {
+        const res = await fetch('/api/memory/wordcloud');
+        const data = await res.json();
+        
+        const container = document.getElementById('wordcloud');
+        container.innerHTML = '';
+        
+        if (data.wordcloud.length === 0) {
+          container.innerHTML = '<div class="loading">暂无词云数据</div>';
+          return;
+        }
+        
+        const maxCount = data.wordcloud[0].count;
+        
+        data.wordcloud.forEach(word => {
+          const span = document.createElement('span');
+          span.className = 'word-item';
+          span.textContent = word.word;
+          
+          const size = 12 + (word.count / maxCount) * 20;
+          span.style.fontSize = size + 'px';
+          span.style.opacity = 0.5 + word.importance * 0.5;
+          
+          span.title = `出现 ${word.count} 次`;
+          
+          container.appendChild(span);
+        });
+      } catch (e) {
+        console.error('Failed to load wordcloud:', e);
+      }
+    }
+
+    // 搜索记忆
+    async function searchMemories() {
+      const query = document.getElementById('searchInput').value.trim();
+      
+      if (!query) return;
+      
+      try {
+        const res = await fetch(`/api/memory/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        const container = document.getElementById('searchResults');
+        container.innerHTML = '';
+        
+        if (data.results.length === 0) {
+          container.innerHTML = '<div class="loading">未找到相关记忆</div>';
+          return;
+        }
+        
+        data.results.forEach(result => {
+          const div = document.createElement('div');
+          div.className = 'search-result';
+          
+          div.innerHTML = `
+            <div class="search-result-content">${result.content}</div>
+            <div class="search-result-meta">
+              类型: ${result.type} | 
+              重要性: ${(result.importance * 100).toFixed(0)}% |
+              创建: ${new Date(result.createdAt).toLocaleDateString()}
+            </div>
+          `;
+          
+          container.appendChild(div);
+        });
+      } catch (e) {
+        console.error('Failed to search:', e);
+      }
+    }
+
+    // 搜索框回车
+    document.getElementById('searchInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') searchMemories();
+    });
+
+    // 初始化
+    loadMemoryGraph();
+    loadTimeline();
+    loadHeatmap();
+    loadWordCloud();
+
+    // 窗口大小改变时重绘图谱
+    window.addEventListener('resize', () => {
+      loadMemoryGraph();
+    });
+  </script>
+</body>
+</html>

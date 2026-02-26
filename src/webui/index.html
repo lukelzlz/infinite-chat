@@ -410,6 +410,7 @@
     <div class="sidebar-tabs">
       <div class="tab active" data-tab="agents">Agents</div>
       <div class="tab" data-tab="config">配置</div>
+      <div class="tab" data-tab="memory">记忆</div>
     </div>
     
     <div class="tab-content active" id="agents-tab">
@@ -490,6 +491,25 @@
         <button class="btn btn-secondary" onclick="resetConfig()">重置</button>
       </div>
     </div>
+    
+    <div class="tab-content" id="memory-tab">
+      <div class="config-section">
+        <h3>🧠 记忆概览</h3>
+        <div id="memoryStats">
+          <div class="config-row">加载中...</div>
+        </div>
+      </div>
+      <div class="config-section">
+        <h3>快速搜索</h3>
+        <div class="config-row">
+          <input type="text" id="memorySearch" placeholder="搜索记忆..." style="flex:1">
+        </div>
+        <div id="memoryResults" style="margin-top:10px"></div>
+      </div>
+      <div class="btn-group">
+        <a href="/memory" class="btn" style="text-decoration:none">查看完整可视化</a>
+      </div>
+    </div>
   </div>
 
   <div class="main">
@@ -537,6 +557,11 @@
           document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
           tab.classList.add('active');
           document.getElementById(tab.dataset.tab + '-tab').classList.add('active');
+          
+          // 切换到记忆标签时加载数据
+          if (tab.dataset.tab === 'memory') {
+            loadMemoryStats();
+          }
         });
       });
     }
@@ -810,6 +835,70 @@
         </div>
       `;
     }
+
+    // 加载记忆统计
+    async function loadMemoryStats() {
+      try {
+        const res = await fetch('/api/memory/graph');
+        const data = await res.json();
+        
+        const container = document.getElementById('memoryStats');
+        
+        if (data.stats) {
+          const types = Object.entries(data.stats.byType || {})
+            .map(([type, count]) => `${type}: ${count}`)
+            .join(' | ');
+          
+          container.innerHTML = `
+            <div class="config-row">
+              <label>总记忆数</label>
+              <span>${data.stats.totalMemories}</span>
+            </div>
+            <div class="config-row">
+              <label>平均重要性</label>
+              <span>${(data.stats.avgImportance * 100).toFixed(0)}%</span>
+            </div>
+            <div class="config-row">
+              <label>类型分布</label>
+              <span style="font-size:0.85em">${types || '无'}</span>
+            </div>
+          `;
+        } else {
+          container.innerHTML = '<div class="config-row">暂无记忆数据</div>';
+        }
+      } catch (e) {
+        document.getElementById('memoryStats').innerHTML = '<div class="config-row">加载失败</div>';
+      }
+    }
+
+    // 搜索记忆
+    async function searchMemory() {
+      const query = document.getElementById('memorySearch').value.trim();
+      if (!query) return;
+      
+      try {
+        const res = await fetch(`/api/memory/search?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        
+        const container = document.getElementById('memoryResults');
+        
+        if (data.results && data.results.length > 0) {
+          container.innerHTML = data.results.slice(0, 5).map(r => 
+            `<div style="padding:8px;background:var(--bg-tertiary);border-radius:4px;margin-bottom:5px;font-size:0.9em">
+              ${escapeHtml(r.content.slice(0, 50))}${r.content.length > 50 ? '...' : ''}
+            </div>`
+          ).join('');
+        } else {
+          container.innerHTML = '<div style="color:var(--text-muted)">未找到相关记忆</div>';
+        }
+      } catch (e) {
+        document.getElementById('memoryResults').innerHTML = '<div style="color:var(--accent)">搜索失败</div>';
+      }
+    }
+
+    document.getElementById('memorySearch')?.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') searchMemory();
+    });
 
     // 工具函数
     function getAgentName(agentId) {
