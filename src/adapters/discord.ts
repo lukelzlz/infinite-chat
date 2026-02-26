@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Events, Message, TextChannel } from 'discord.js';
 import { PlatformAdapter } from './base';
-import { IncomingMessage } from '../core/types';
+import { IncomingMessage, MessageAttachment } from '../core/types';
 
 export class DiscordAdapter extends PlatformAdapter {
   name = 'discord';
@@ -24,13 +24,39 @@ export class DiscordAdapter extends PlatformAdapter {
       // 忽略机器人消息
       if (msg.author.bot) return;
       
+      // 提取附件
+      const attachments: MessageAttachment[] = [];
+      
+      if (msg.attachments.size > 0) {
+        for (const [, attachment] of msg.attachments) {
+          // 只处理文档类型
+          const ext = attachment.name?.split('.').pop()?.toLowerCase();
+          const docExts = ['txt', 'md', 'json', 'csv', 'log', 'js', 'ts', 'py', 'go', 'rs', 'html', 'css', 'xml', 'yaml', 'yml', 'sh'];
+          
+          if (ext && docExts.includes(ext)) {
+            attachments.push({
+              type: 'document',
+              fileId: attachment.id,
+              filename: attachment.name ?? undefined,
+              mimeType: attachment.contentType ?? undefined,
+              size: attachment.size,
+              url: attachment.url,
+            });
+            console.log(`[Discord] Document received: ${attachment.name} (${attachment.size} bytes)`);
+          }
+        }
+      }
+      
+      // 如果没有文本且没有可处理的附件，跳过
+      if (!msg.content && attachments.length === 0) return;
+      
       const incomingMsg: IncomingMessage = {
         sessionId: this.formatSessionId(
           'discord',
           msg.author.id,
           msg.guildId ?? undefined
         ),
-        content: msg.content,
+        content: msg.content || '[文档]',
         sender: {
           id: msg.author.id,
           name: msg.author.username,
@@ -43,6 +69,7 @@ export class DiscordAdapter extends PlatformAdapter {
           guildId: msg.guildId,
           isDM: !msg.guildId,
         },
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
       
       if (this.messageCallback) {
@@ -78,6 +105,26 @@ export class DiscordAdapter extends PlatformAdapter {
       }
     } catch (error) {
       console.error(`[${this.name}] Send failed:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * 下载文件（通过 URL）
+   */
+  async downloadFile(url: string): Promise<{ content: Buffer; filename?: string }> {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.statusText}`);
+      }
+      
+      const content = Buffer.from(await response.arrayBuffer());
+      const filename = url.split('/').pop()?.split('?')[0];
+      
+      return { content, filename };
+    } catch (error) {
+      console.error('[Discord] Download file error:', error);
       throw error;
     }
   }

@@ -130,7 +130,7 @@ export class ChatBotEngine {
    * 处理入站消息
    */
   private async handleIncomingMessage(incoming: IncomingMessage): Promise<void> {
-    const { sessionId, content, sender } = incoming;
+    const { sessionId, content, sender, attachments } = incoming;
 
     console.log(`[Engine] Message from ${sessionId}: ${content.slice(0, 50)}...`);
 
@@ -140,6 +140,12 @@ export class ChatBotEngine {
 
       // 获取适配器（声明一次，复用）
       const adapter = this.adapters.get(session.platform);
+
+      // 处理附件（自动导入文档到 RAG）
+      if (attachments && attachments.length > 0) {
+        await this.handleAttachments(attachments, session, adapter, content);
+        return; // 附件处理完毕，等待用户下一步指令
+      }
 
       // 获取或创建用户
       const user = this.permissionManager.getOrCreateUser(session.platform, session.userId);
@@ -335,6 +341,75 @@ export class ChatBotEngine {
         nextAgent.id,
         chainCount + 1
       );
+    }
+  }
+
+  /**
+   * 处理附件（自动导入文档到 RAG）
+   */
+  private async handleAttachments(
+    attachments: import('./types').MessageAttachment[],
+    session: Session,
+    adapter: PlatformAdapter | undefined,
+    caption: string
+  ): Promise<void> {
+    const rag = getRAGService();
+    const results: string[] = [];
+
+    for (const attachment of attachments) {
+      // 只处理文档类型
+      if (attachment.type !== 'document') continue;
+
+      try {
+        // 检查文件扩展名
+        const ext = attachment.filename?.split('.').pop()?.toLowerCase();
+        const allowedExts = ['txt', 'md', 'json', 'csv', 'log', 'js', 'ts', 'py', 'go', 'rs', 'html', 'css', 'xml', 'yaml', 'yml', 'sh'];
+        
+        if (!ext || !allowedExts.includes(ext)) {
+          results.push(`❌ ${attachment.filename}: 不支持的文件类型 (.${ext})`);
+          continue;
+        }
+
+        // 检查文件大小 (5MB 限制)
+        if (attachment.size && attachment.size > 5 * 1024 * 1024) {
+          results.push(`❌ ${attachment.filename}: 文件过大 (最大 5MB)`);
+          continue;
+        }
+
+        // 下载文件
+        let content: string;
+        
+        if (session.platform === 'telegram' && adapter && 'downloadFile' in adapter) {
+          const fileData = await (adapter as any).downloadFile(attachment.fileId);
+          content = fileData.content.toString('utf-8');
+        } else if (session.platform === 'discord' && attachment.url) {
+          // Discord 文件通过 URL 下载
+          const response = await fetch(attachment.url);
+          if (!response.ok) {
+            throw new Error(`Download failed: ${response.statusText}`);
+          }
+          content = await response.text();
+        } else {
+          results.push(`❌ ${attachment.filename}: 平台不支持文件下载`);
+          continue;
+        }
+
+        // 导入到 RAG
+        const doc = await rag.uploadDocument(content, attachment.filename || 'unknown.txt');
+        results.push(`✅ ${attachment.filename}: 已导入知识库 (${doc.chunks.length} 个分块)`);
+        console.log(`[Engine] Document imported: ${attachment.filename}`);
+      } catch (error) {
+        console.error(`[Engine] Failed to process attachment:`, error);
+        results.push(`❌ ${attachment.filename}: 处理失败`);
+      }
+    }
+
+    // 发送结果
+    if (adapter && results.length > 0) {
+      const message = results.length === 1 
+        ? results[0] 
+        : `📎 文件处理结果:\n\n${results.join('\n')}`;
+      await adapter.sendMessage(session.id, message + '\n\n💡 现在可以问我关于这些文件的问题了！');
     }
   }
 

@@ -43,6 +43,16 @@ export interface GroupChatConfig {
   chainThreshold: number;
 }
 
+/** 消息附件 */
+export interface MessageAttachment {
+  type: 'document' | 'image' | 'audio' | 'video';
+  fileId: string;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  url?: string;
+}
+
 /** 入站消息 */
 export interface IncomingMessage {
   sessionId: string;
@@ -54,6 +64,8 @@ export interface IncomingMessage {
   };
   replyTo?: string;
   metadata?: Record<string, any>;
+  /** 附件列表 */
+  attachments?: MessageAttachment[];
 }
 
 /** LLM 高级参数 */
