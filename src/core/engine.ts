@@ -7,6 +7,7 @@ import { LLMProvider, createLLMProvider } from '../llm';
 import { PlatformAdapter } from '../adapters/base';
 import { Plugin, PluginManager } from '../plugins';
 import { PermissionManager, getPermissionManager } from '../permission';
+import { generateSecureId } from '../utils/security';
 
 /**
  * 聊天机器人引擎
