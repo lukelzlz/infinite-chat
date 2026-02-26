@@ -148,6 +148,78 @@ export class WebAdapter extends PlatformAdapter {
       res.json({ presets });
     });
 
+    // 角色卡 API
+    this.app.get('/api/characters', async (req, res) => {
+      try {
+        const { getCharacterManager } = await import('../character');
+        const charManager = getCharacterManager();
+        
+        if (!charManager) {
+          res.json({ characters: [] });
+          return;
+        }
+        
+        const characters = charManager.getAllCharacters().map(char => ({
+          id: char.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+          name: char.name,
+          description: char.description?.slice(0, 100),
+          avatarUrl: char.infinite_chat?.avatarUrl,
+        }));
+        
+        res.json({ characters });
+      } catch (e) {
+        res.json({ characters: [] });
+      }
+    });
+
+    this.app.get('/api/characters/:id', async (req, res) => {
+      try {
+        const { getCharacterManager } = await import('../character');
+        const charManager = getCharacterManager();
+        
+        if (!charManager) {
+          res.json({ error: 'Character system not initialized' });
+          return;
+        }
+        
+        const character = charManager.getCharacter(req.params.id);
+        if (!character) {
+          res.json({ error: 'Character not found' });
+          return;
+        }
+        
+        res.json({ character });
+      } catch (e: any) {
+        res.json({ error: e.message });
+      }
+    });
+
+    this.app.post('/api/characters/import', async (req, res) => {
+      try {
+        const { getCharacterManager } = await import('../character');
+        const charManager = getCharacterManager();
+        
+        if (!charManager) {
+          res.json({ error: 'Character system not initialized' });
+          return;
+        }
+        
+        const { url, json } = req.body;
+        
+        if (url) {
+          const result = await charManager.importFromURL(url);
+          res.json(result);
+        } else if (json) {
+          const result = await charManager.importFromJSON(json);
+          res.json(result);
+        } else {
+          res.json({ error: 'Provide url or json' });
+        }
+      } catch (e: any) {
+        res.json({ error: e.message });
+      }
+    });
+
     // SPA 回退
     this.app.get('*', (req, res) => {
       res.sendFile(path.join(webDir, 'index.html'));
