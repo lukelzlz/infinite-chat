@@ -141,7 +141,6 @@ export class ChatBotEngine {
       
       // 检查用户是否被封禁
       if (user.banned) {
-        // 检查封禁是否过期
         if (user.banExpiresAt && user.banExpiresAt < Date.now()) {
           this.permissionManager.unbanUser(session.platform, session.userId);
         } else {
@@ -169,6 +168,12 @@ export class ChatBotEngine {
           await adapter.sendMessage(sessionId, `${rateLimitResult.reason}，请 ${rateLimitResult.retryAfter} 秒后再试。`);
         }
         return;
+      }
+
+      // 发送 typing 状态
+      const adapter = this.adapters.get(session.platform);
+      if (adapter && 'sendTyping' in adapter) {
+        (adapter as any).sendTyping(sessionId).catch(() => {});
       }
 
       // 检查是否是插件命令

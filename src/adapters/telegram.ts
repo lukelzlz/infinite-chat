@@ -17,8 +17,9 @@ export class TelegramAdapter extends PlatformAdapter {
     this.bot.on('message:text', async (ctx: Context) => {
       if (!ctx.message?.text || !ctx.from) return;
       
+      const chatId = ctx.chat?.id;
       const msg: IncomingMessage = {
-        sessionId: this.formatSessionId('telegram', ctx.from.id.toString(), ctx.chat?.id?.toString()),
+        sessionId: this.formatSessionId('telegram', ctx.from.id.toString(), chatId?.toString()),
         content: ctx.message.text,
         sender: {
           id: ctx.from.id.toString(),
@@ -29,11 +30,20 @@ export class TelegramAdapter extends PlatformAdapter {
         metadata: {
           messageId: ctx.message.message_id,
           chatType: ctx.chat?.type,
+          chatId,
         },
       };
       
+      console.log(`[Telegram] Received message from ${ctx.from.id}: ${ctx.message.text.slice(0, 50)}...`);
+      
       if (this.messageCallback) {
-        await this.messageCallback(msg);
+        try {
+          await this.messageCallback(msg);
+        } catch (e) {
+          console.error('[Telegram] Message callback error:', e);
+          // 发送错误提示
+          await ctx.reply('处理消息时出错，请稍后重试');
+        }
       }
     });
     
@@ -45,7 +55,7 @@ export class TelegramAdapter extends PlatformAdapter {
       
       // 开始 polling
       this.bot.start({
-        onStart: () => console.log('[Telegram] Bot started'),
+        onStart: () => console.log('[Telegram] Bot started (polling mode)'),
       });
     } catch (error) {
       console.error('[Telegram] Failed to start bot:', error);
@@ -68,11 +78,50 @@ export class TelegramAdapter extends PlatformAdapter {
         parse_mode: 'Markdown',
         ...options,
       });
+      console.log(`[Telegram] Sent message to ${chatId}`);
     } catch (error) {
       if (error instanceof GrammyError) {
         console.error(`[${this.name}] Send failed:`, error.description);
+        
+        // 如果 Markdown 解析失败，尝试纯文本
+        if (error.description.includes('parse')) {
+          try {
+            await this.bot.api.sendMessage(chatId, message, options);
+            return;
+          } catch (e) {
+            console.error(`[${this.name}] Plain text also failed:`, e);
+          }
+        }
       }
       throw error;
+    }
+  }
+
+  /**
+   * 发送打字状态
+   */
+  async sendTyping(sessionId: string): Promise<void> {
+    const parts = sessionId.split(':');
+    const chatId = parts.length > 2 ? parts[2] : parts[1];
+    
+    try {
+      await this.bot.api.sendChatAction(chatId, 'typing');
+    } catch (e) {
+      // 忽略 typing 错误
+    }
+  }
+
+  /**
+   * 发送上传照片状态
+   */
+  async sendUploadingPhoto(sessionId: string): Promise<void> {
+    const parts = sessionId.split(':');
+    const chatId = parts.length > 2 ? parts[2] : parts[1];
+    
+    try {
+      await this.bot.api.sendChatAction(chatId, 'upload_photo');
+    } catch (e) {
+      // 忽略错误
     }
   }
 
