@@ -152,6 +152,16 @@ export interface FrameworkConfig {
     watchPath?: string;
     debounceMs?: number;
   };
+  /** 鉴权配置 */
+  auth?: {
+    enabled: boolean;
+    /** 管理员密码 */
+    adminPassword?: string;
+    /** JWT 密钥 */
+    jwtSecret?: string;
+    /** Token 有效期（秒） */
+    tokenExpiry?: number;
+  };
 }
 
 /** 配置变更事件 */

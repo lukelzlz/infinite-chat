@@ -1,13 +1,14 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PlatformAdapter } from './base';
 import { IncomingMessage } from '../core/types';
 import path from 'path';
 import { generateSecureId, safeJsonParse } from '../utils/security';
+import * as crypto from 'crypto';
 
 interface WebMessage {
-  type: 'message' | 'config' | 'status' | 'ping';
+  type: 'message' | 'config' | 'status' | 'ping' | 'auth';
   data: any;
 }
 
@@ -16,15 +17,23 @@ interface ConnectedClient {
   sessionId: string;
   userId: string;
   lastActivity: number;
+  authenticated: boolean;
+}
+
+interface AuthConfig {
+  enabled: boolean;
+  adminPassword?: string;
+  jwtSecret?: string;
+  tokenExpiry?: number;
+}
+
+interface AuthToken {
+  token: string;
+  expiresAt: number;
 }
 
 /**
  * Web 平台适配器
- * 
- * 功能：
- * - 提供 Web UI 界面
- * - WebSocket 实时通信
- * - REST API 接口
  */
 export class WebAdapter extends PlatformAdapter {
   name = 'web';
@@ -36,21 +45,88 @@ export class WebAdapter extends PlatformAdapter {
   private messageCallback: ((msg: IncomingMessage) => Promise<void>) | null = null;
   private clients: Map<string, ConnectedClient> = new Map();
   private engine: any = null;
+  
+  // 鉴权
+  private authConfig: AuthConfig;
+  private validTokens: Map<string, AuthToken> = new Map();
 
   // 安全配置
-  private readonly MAX_MESSAGE_SIZE = 1024 * 1024; // 1MB
-  private readonly CLIENT_TIMEOUT = 5 * 60 * 1000; // 5 分鐘無活動超時
-  private readonly MAX_CLIENTS = 1000; // 最大客戶端連接數
+  private readonly MAX_MESSAGE_SIZE = 1024 * 1024;
+  private readonly CLIENT_TIMEOUT = 5 * 60 * 1000;
+  private readonly MAX_CLIENTS = 1000;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config: {
     port?: number;
     staticDir?: string;
+    auth?: AuthConfig;
   } = {}) {
     super();
     this.port = config.port || 3000;
+    this.authConfig = config.auth || { enabled: false };
     this.app = express();
     this.setupRoutes(config.staticDir);
+    
+    // 定期清理过期 token
+    setInterval(() => this.cleanupTokens(), 60000);
+  }
+  
+  /**
+   * 鉴权中间件
+   */
+  private authMiddleware(req: Request, res: Response, next: NextFunction): void {
+    if (!this.authConfig.enabled) {
+      next();
+      return;
+    }
+    
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.replace('Bearer ', '');
+    
+    if (!token || !this.validateToken(token)) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    
+    next();
+  }
+  
+  /**
+   * 生成 Token
+   */
+  private generateToken(): string {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + (this.authConfig.tokenExpiry || 86400) * 1000;
+    
+    this.validTokens.set(token, { token, expiresAt });
+    return token;
+  }
+  
+  /**
+   * 验证 Token
+   */
+  private validateToken(token: string): boolean {
+    const auth = this.validTokens.get(token);
+    if (!auth) return false;
+    
+    if (auth.expiresAt < Date.now()) {
+      this.validTokens.delete(token);
+      return false;
+    }
+    
+    return true;
+  }
+  
+  /**
+   * 清理过期 Token
+   */
+  private cleanupTokens(): void {
+    const now = Date.now();
+    for (const [token, auth] of this.validTokens) {
+      if (auth.expiresAt < now) {
+        this.validTokens.delete(token);
+      }
+    }
   }
 
   /**
@@ -71,12 +147,46 @@ export class WebAdapter extends PlatformAdapter {
     const webDir = staticDir || path.join(__dirname, '../webui');
     this.app.use(express.static(webDir));
 
+    // ============ 公开 API ============
+
+    // 登录
+    this.app.post('/api/auth/login', (req, res) => {
+      const { password } = req.body;
+      
+      if (!this.authConfig.enabled) {
+        // 鉴权未启用，直接返回成功
+        res.json({ success: true, authEnabled: false });
+        return;
+      }
+      
+      if (password === this.authConfig.adminPassword) {
+        const token = this.generateToken();
+        res.json({ 
+          success: true, 
+          token,
+          authEnabled: true,
+          expiresIn: this.authConfig.tokenExpiry || 86400,
+        });
+      } else {
+        res.status(401).json({ success: false, error: '密码错误' });
+      }
+    });
+
+    // 检查鉴权状态
+    this.app.get('/api/auth/status', (req, res) => {
+      res.json({ 
+        authEnabled: this.authConfig.enabled,
+        hasPassword: !!this.authConfig.adminPassword,
+      });
+    });
+
     // API 路由
     this.app.get('/api/status', (req, res) => {
       res.json({
         status: 'ok',
         clients: this.clients.size,
         engine: this.engine?.getStatus() || null,
+        authEnabled: this.authConfig.enabled,
       });
     });
 
@@ -89,8 +199,10 @@ export class WebAdapter extends PlatformAdapter {
       res.json({ agents: status.agents || [] });
     });
 
-    // 配置 API
-    this.app.get('/api/config', (req, res) => {
+    // ============ 需要鉴权的 API ============
+
+    // 配置 API - 需要鉴权
+    this.app.get('/api/config', this.authMiddleware.bind(this), (req, res) => {
       if (!this.engine) {
         res.json({ error: 'Engine not initialized' });
         return;
@@ -101,7 +213,7 @@ export class WebAdapter extends PlatformAdapter {
       res.json(safeConfig);
     });
 
-    this.app.post('/api/config', (req, res) => {
+    this.app.post('/api/config', this.authMiddleware.bind(this), (req, res) => {
       if (!this.engine) {
         res.json({ error: 'Engine not initialized' });
         return;
@@ -115,7 +227,7 @@ export class WebAdapter extends PlatformAdapter {
       }
     });
 
-    this.app.post('/api/config/llm', (req, res) => {
+    this.app.post('/api/config/llm', this.authMiddleware.bind(this), (req, res) => {
       if (!this.engine) {
         res.json({ error: 'Engine not initialized' });
         return;
@@ -421,6 +533,7 @@ export class WebAdapter extends PlatformAdapter {
       sessionId,
       userId,
       lastActivity: Date.now(),
+      authenticated: !this.authConfig.enabled, // 如果没启用鉴权，默认已认证
     });
 
     // 发送欢迎消息

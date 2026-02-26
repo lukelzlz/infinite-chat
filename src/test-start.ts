@@ -1,38 +1,18 @@
-// Docker 启动脚本
-import { ChatBotEngine, TelegramAdapter, WebAdapter, createEngineFromConfig } from './index';
+// Docker/本地 启动脚本
+import { ChatBotEngine, TelegramAdapter, WebAdapter } from './index';
 import { FrameworkConfig } from './core/types';
-import * as path from 'path';
 
 async function main() {
   console.log('🚀 Starting infinite-chat...\n');
 
-  // 从配置文件加载
-  const configPath = process.env.CONFIG_PATH || path.join(__dirname, '../config/config.yaml');
-  
-  try {
-    const engine = await createEngineFromConfig(configPath);
-    await engine.start();
-    
-    console.log('\n✅ infinite-chat started!');
-    console.log('📱 Telegram bot is running');
-    console.log('🌐 Web UI: http://localhost:3000\n');
-  } catch (e) {
-    console.error('Failed to start:', e);
-    
-    // 回退到环境变量配置
-    console.log('\n尝试使用环境变量配置...');
-    await startWithEnv();
-  }
-}
-
-async function startWithEnv() {
+  // 从环境变量读取配置
   const config: FrameworkConfig = {
     llm: {
       provider: 'custom',
       model: process.env.LLM_MODEL || 'gpt-4o',
       baseUrl: process.env.LLM_BASE_URL,
       apiKey: process.env.LLM_API_KEY,
-      maxTokens: parseInt(process.env.LLM_MAX_TOKENS || '4096'),
+      maxTokens: parseInt(process.env.LLM_MAX_TOKENS || '8192'),
       temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.7'),
     },
     memory: {
@@ -46,7 +26,7 @@ async function startWithEnv() {
           id: 'assistant',
           name: '小助手',
           description: '活泼友好的AI助手',
-          systemPrompt: '你是一个活泼、友好的AI助手。喜欢用颜文字，回复简洁有趣。',
+          systemPrompt: '你是一个活泼、友好的AI助手，叫小助手。你喜欢用颜文字表达情绪，回复简洁有趣。你会记住用户的偏好和重要信息。',
           isDefault: true,
         },
       ],
@@ -58,6 +38,10 @@ async function startWithEnv() {
       },
     },
     adapters: [],
+    auth: {
+      enabled: !!process.env.ADMIN_PASSWORD,
+      adminPassword: process.env.ADMIN_PASSWORD,
+    },
   };
 
   const engine = new ChatBotEngine(config);
@@ -71,14 +55,28 @@ async function startWithEnv() {
 
   // Web
   const webPort = parseInt(process.env.PORT || '3000');
-  const web = new WebAdapter({ port: webPort });
+  const web = new WebAdapter({ 
+    port: webPort,
+    auth: {
+      enabled: !!process.env.ADMIN_PASSWORD,
+      adminPassword: process.env.ADMIN_PASSWORD,
+    },
+  });
   engine.registerAdapter(web);
   console.log(`✅ Web adapter registered (port ${webPort})`);
 
+  // 启动
   await engine.start();
 
   console.log('\n✅ infinite-chat started!');
-  console.log(`🌐 Web UI: http://localhost:${webPort}\n`);
+  console.log(`🌐 Web UI: http://localhost:${webPort}`);
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    console.log('📱 Telegram bot is running');
+  }
+  console.log('');
 }
 
-main().catch(console.error);
+main().catch(err => {
+  console.error('❌ Failed to start:', err);
+  process.exit(1);
+});

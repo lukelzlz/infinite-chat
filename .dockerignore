@@ -7,4 +7,3 @@ node_modules/
 data/
 tests/
 *.md
-src/webui/memory.html

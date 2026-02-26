@@ -1,6 +1,17 @@
 import { Message, LLMConfig, CustomModelConfig } from '../core/types';
 import { LLMProvider } from './base';
 
+// 动态导入 OpenAI
+let OpenAI: any = null;
+
+async function getOpenAI() {
+  if (!OpenAI) {
+    const module = await import('openai');
+    OpenAI = module.default;
+  }
+  return OpenAI;
+}
+
 /**
  * 自定义模型提供者
  * 
@@ -18,6 +29,7 @@ import { LLMProvider } from './base';
 export class CustomModelProvider extends LLMProvider {
   private client: any = null;
   private customConfig: CustomModelConfig;
+  private initPromise: Promise<void> | null = null;
 
   constructor(config: LLMConfig, customConfig?: CustomModelConfig) {
     super(config);
@@ -25,18 +37,34 @@ export class CustomModelProvider extends LLMProvider {
       baseUrl: config.baseUrl || '',
       model: config.model,
     };
-    this.initClient();
+    // 启动初始化
+    this.initPromise = this.initClient();
   }
 
   private async initClient(): Promise<void> {
     try {
-      const { default: OpenAI } = await import('openai');
-      this.client = new OpenAI({
+      const OpenAIClass = await getOpenAI();
+      this.client = new OpenAIClass({
         apiKey: this.config.apiKey,
         baseURL: this.customConfig.baseUrl,
       });
+      console.log(`[CustomModel] Client initialized for ${this.customConfig.baseUrl}`);
     } catch (e) {
       console.error('[CustomModel] OpenAI SDK not found. Run: npm install openai');
+      throw e;
+    }
+  }
+
+  /**
+   * 确保客户端已初始化
+   */
+  private async ensureClient(): Promise<void> {
+    if (this.client) return;
+    if (this.initPromise) {
+      await this.initPromise;
+    }
+    if (!this.client) {
+      throw new Error('CustomModel client not initialized');
     }
   }
 
@@ -48,9 +76,7 @@ export class CustomModelProvider extends LLMProvider {
       temperature?: number;
     }
   ): Promise<string> {
-    if (!this.client) {
-      throw new Error('CustomModel client not initialized');
-    }
+    await this.ensureClient();
 
     const formattedMessages: any[] = [];
     
@@ -94,9 +120,7 @@ export class CustomModelProvider extends LLMProvider {
       temperature?: number;
     }
   ): Promise<string> {
-    if (!this.client) {
-      throw new Error('CustomModel client not initialized');
-    }
+    await this.ensureClient();
 
     const formattedMessages: any[] = [];
     

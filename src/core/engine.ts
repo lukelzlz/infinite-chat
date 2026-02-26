@@ -248,12 +248,18 @@ export class ChatBotEngine {
       }
 
       console.log(`[Engine] Response sent to ${sessionId}`);
-    } catch (e) {
+    } catch (e: any) {
       console.error(`[Engine] Error processing message:`, e);
+      console.error(`[Engine] Error stack:`, e?.stack);
+      console.error(`[Engine] Session: ${sessionId}, Platform: ${sessionId.split(':')[0]}`);
       
       const adapter = this.adapters.get(sessionId.split(':')[0]);
       if (adapter) {
-        await adapter.sendMessage(sessionId, '抱歉，处理消息时出错。请稍后重试。');
+        try {
+          await adapter.sendMessage(sessionId, `抱歉，处理消息时出错: ${e?.message || '未知错误'}`);
+        } catch (sendError) {
+          console.error(`[Engine] Failed to send error message:`, sendError);
+        }
       }
     }
   }
