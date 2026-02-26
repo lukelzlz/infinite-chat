@@ -245,18 +245,73 @@ export class DocumentProcessor {
 }
 
 /**
- * 简单向量存储（内存版）
+ * 简单向量存储（支持持久化）
  */
 export class SimpleVectorStore {
   private documents: Map<string, Document> = new Map();
   private chunkIndex: Map<string, DocumentChunk[]> = new Map(); // docId -> chunks
+  private dataDir: string;
+
+  constructor(dataDir: string = './data/rag') {
+    this.dataDir = dataDir;
+  }
+
+  /**
+   * 初始化：从磁盘加载已有数据
+   */
+  async init(): Promise<void> {
+    try {
+      await fs.promises.mkdir(this.dataDir, { recursive: true });
+      await this.load();
+    } catch (error) {
+      console.error('[VectorStore] Init error:', error);
+    }
+  }
+
+  /**
+   * 保存到磁盘
+   */
+  async save(): Promise<void> {
+    const indexPath = path.join(this.dataDir, 'index.json');
+    const data = {
+      documents: Array.from(this.documents.entries()),
+      savedAt: Date.now(),
+    };
+    await fs.promises.writeFile(indexPath, JSON.stringify(data, null, 2), 'utf-8');
+  }
+
+  /**
+   * 从磁盘加载
+   */
+  async load(): Promise<void> {
+    const indexPath = path.join(this.dataDir, 'index.json');
+    try {
+      const content = await fs.promises.readFile(indexPath, 'utf-8');
+      const data = JSON.parse(content);
+      
+      this.documents.clear();
+      this.chunkIndex.clear();
+      
+      for (const [id, doc] of data.documents) {
+        this.documents.set(id, doc);
+        this.chunkIndex.set(id, doc.chunks);
+      }
+      
+      console.log(`[VectorStore] Loaded ${this.documents.size} documents from disk`);
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
+        console.error('[VectorStore] Load error:', error);
+      }
+    }
+  }
 
   /**
    * 添加文档
    */
-  addDocument(doc: Document): void {
+  async addDocument(doc: Document): Promise<void> {
     this.documents.set(doc.id, doc);
     this.chunkIndex.set(doc.id, doc.chunks);
+    await this.save();
   }
 
   /**
@@ -276,10 +331,11 @@ export class SimpleVectorStore {
   /**
    * 删除文档
    */
-  deleteDocument(docId: string): boolean {
+  async deleteDocument(docId: string): Promise<boolean> {
     if (!this.documents.has(docId)) return false;
     this.documents.delete(docId);
     this.chunkIndex.delete(docId);
+    await this.save();
     return true;
   }
 

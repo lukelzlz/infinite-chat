@@ -221,6 +221,18 @@ export class ChatBotEngine {
         systemPrompt = memContext.systemPrompt;
       }
 
+      // RAG: 检索知识库相关内容
+      const rag = getRAGService();
+      const ragResults = rag.searchSync(content, 3);
+      if (ragResults.length > 0) {
+        const ragContext = ragResults
+          .map((r, i) => `【参考资料${i + 1}】(来源: ${r.source}, 相关度: ${(r.score * 100).toFixed(0)}%)\n${r.content}`)
+          .join('\n\n');
+        
+        systemPrompt = (systemPrompt || '') + `\n\n📚 以下是与用户问题相关的知识库内容，请参考这些内容回答：\n\n${ragContext}`;
+        console.log(`[Engine] RAG: Found ${ragResults.length} relevant documents`);
+      }
+
       // 调用 LLM
       const response = await llmProvider.chat(messages, {
         systemPrompt,

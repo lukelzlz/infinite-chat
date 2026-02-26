@@ -472,7 +472,7 @@ export class WebAdapter extends PlatformAdapter {
         const { getRAGService } = await import('../rag');
         const rag = getRAGService();
         
-        const docs = rag.listDocuments().map(doc => ({
+        const docs = (await rag.listDocuments()).map(doc => ({
           id: doc.id,
           filename: doc.filename,
           chunks: doc.chunks.length,
@@ -492,7 +492,7 @@ export class WebAdapter extends PlatformAdapter {
         const { getRAGService } = await import('../rag');
         const rag = getRAGService();
         
-        const success = rag.deleteDocument(req.params.id);
+        const success = await rag.deleteDocument(req.params.id);
         res.json({ success });
       } catch (e: any) {
         res.json({ error: e.message, success: false });

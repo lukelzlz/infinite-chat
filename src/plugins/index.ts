@@ -67,3 +67,5 @@ export { HelpPlugin } from './help';
 export { StatsPlugin } from './stats';
 export { BrowserPlugin } from './browser';
 export { WebSearchPlugin } from './websearch';
+export { RAGPlugin } from './rag';
+export { FileReaderPlugin } from './file-reader';

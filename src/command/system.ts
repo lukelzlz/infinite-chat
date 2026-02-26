@@ -483,7 +483,7 @@ export class CommandSystem {
         return '请提供搜索关键词';
       }
       
-      const results = rag.search(query, 3);
+      const results = await rag.search(query, 3);
       
       if (results.length === 0) {
         return '未找到相关内容';
@@ -506,8 +506,8 @@ export class CommandSystem {
       const { getRAGService } = await import('../rag');
       const rag = getRAGService();
       
-      const docs = rag.listDocuments();
-      const stats = rag.getStats();
+      const docs = await rag.listDocuments();
+      const stats = await rag.getStats();
       
       if (docs.length === 0) {
         return '知识库为空，使用 /upload 上传文档';
@@ -537,7 +537,7 @@ export class CommandSystem {
         return '请提供文档ID';
       }
       
-      const success = rag.deleteDocument(docId);
+      const success = await rag.deleteDocument(docId);
       
       if (success) {
         return `文档 ${docId} 已删除`;

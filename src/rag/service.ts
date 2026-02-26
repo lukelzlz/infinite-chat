@@ -3,23 +3,47 @@ import { Message } from '../core/types';
 import { LLMProvider } from '../llm';
 
 /**
+ * RAG 服务配置
+ */
+export interface RAGServiceOptions {
+  chunkSize?: number;
+  chunkOverlap?: number;
+  dataDir?: string;
+}
+
+/**
  * RAG 服务
  */
 export class RAGService {
   private processor: DocumentProcessor;
   private store: SimpleVectorStore;
+  private initialized = false;
 
-  constructor(options?: { chunkSize?: number; chunkOverlap?: number }) {
-    this.processor = new DocumentProcessor(options);
-    this.store = new SimpleVectorStore();
+  constructor(options: RAGServiceOptions = {}) {
+    this.processor = new DocumentProcessor({
+      chunkSize: options.chunkSize,
+      chunkOverlap: options.chunkOverlap,
+    });
+    this.store = new SimpleVectorStore(options.dataDir);
+  }
+
+  /**
+   * 初始化服务（加载持久化数据）
+   */
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    await this.store.init();
+    this.initialized = true;
+    console.log('[RAG] Service initialized');
   }
 
   /**
    * 上传文档
    */
   async uploadDocument(content: string, filename: string): Promise<Document> {
+    await this.init();
     const doc = await this.processor.processText(content, filename);
-    this.store.addDocument(doc);
+    await this.store.addDocument(doc);
     console.log(`[RAG] Document uploaded: ${filename} (${doc.chunks.length} chunks)`);
     return doc;
   }
@@ -28,8 +52,9 @@ export class RAGService {
    * 从文件上传
    */
   async uploadFile(filePath: string): Promise<Document> {
+    await this.init();
     const doc = await this.processor.loadFile(filePath);
-    this.store.addDocument(doc);
+    await this.store.addDocument(doc);
     console.log(`[RAG] File uploaded: ${doc.filename}`);
     return doc;
   }
@@ -37,21 +62,24 @@ export class RAGService {
   /**
    * 删除文档
    */
-  deleteDocument(docId: string): boolean {
+  async deleteDocument(docId: string): Promise<boolean> {
+    await this.init();
     return this.store.deleteDocument(docId);
   }
 
   /**
    * 列出文档
    */
-  listDocuments(): Document[] {
+  async listDocuments(): Promise<Document[]> {
+    await this.init();
     return this.store.listDocuments();
   }
 
   /**
    * 搜索相关内容
    */
-  search(query: string, topK: number = 5): Array<{ content: string; source: string; score: number }> {
+  async search(query: string, topK: number = 5): Promise<Array<{ content: string; source: string; score: number }>> {
+    await this.init();
     const results = this.store.search(query, topK);
     
     return results.map(r => ({
@@ -62,10 +90,26 @@ export class RAGService {
   }
 
   /**
+   * 同步搜索（用于引擎内部调用）
+   */
+  searchSync(query: string, topK: number = 5): Array<{ content: string; source: string; score: number }> {
+    // 如果未初始化，返回空结果（避免阻塞）
+    if (!this.initialized) {
+      return [];
+    }
+    const results = this.store.search(query, topK);
+    return results.map(r => ({
+      content: r.chunk.content,
+      source: r.chunk.metadata.source,
+      score: r.score,
+    }));
+  }
+
+  /**
    * 构建带上下文的 Prompt
    */
-  buildContextPrompt(query: string, topK: number = 5): string {
-    const results = this.search(query, topK);
+  async buildContextPrompt(query: string, topK: number = 5): Promise<string> {
+    const results = await this.search(query, topK);
     
     if (results.length === 0) {
       return query;
@@ -87,11 +131,12 @@ ${context}
   /**
    * 获取统计信息
    */
-  getStats(): {
+  async getStats(): Promise<{
     documentCount: number;
     totalChunks: number;
     totalCharacters: number;
-  } {
+  }> {
+    await this.init();
     return this.store.getStats();
   }
 
@@ -105,7 +150,7 @@ ${context}
     options?: { topK?: number; systemPrompt?: string }
   ): Promise<string> {
     // 搜索相关内容
-    const results = this.search(query, options?.topK || 5);
+    const results = await this.search(query, options?.topK || 5);
 
     if (results.length === 0) {
       // 没有相关内容，直接对话
@@ -141,7 +186,8 @@ export function getRAGService(): RAGService {
   return globalRAGService;
 }
 
-export function initRAGService(options?: { chunkSize?: number; chunkOverlap?: number }): RAGService {
+export async function initRAGService(options?: RAGServiceOptions): Promise<RAGService> {
   globalRAGService = new RAGService(options);
+  await globalRAGService.init();
   return globalRAGService;
 }
