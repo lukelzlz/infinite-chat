@@ -1,12 +1,10 @@
 node_modules/
-dist/
 *.log
 .env
 .env.*
-*.ts
-!*.d.ts
-src/
-tests/
-*.md
 .git/
 .gitignore
+data/
+tests/
+*.md
+src/webui/memory.html

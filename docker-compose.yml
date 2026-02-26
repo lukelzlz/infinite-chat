@@ -7,12 +7,18 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
     environment:
       - NODE_ENV=production
-      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-    volumes:
-      - ./data:/app/data
+      - TZ=Asia/Shanghai
+      - CONFIG_PATH=/app/config/config.yaml
+      # 可以用环境变量覆盖配置
+      - TELEGRAM_BOT_TOKEN=8666478320:AAGWsvp2EY1HJfo27Ax98MPWmxNOWeYAb_I
+      - LLM_BASE_URL=https://new.lukelzlz.top/v1
+      - LLM_API_KEY=sk-MXqK8z0O6mfpcxCqC8fGLOtPLdbssJVE01OsaHAi8ZwFfI5J
+      - LLM_MODEL=Qwen/Qwen3-VL-235B-A22B-Thinking
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/status"]
       interval: 30s

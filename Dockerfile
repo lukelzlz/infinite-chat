@@ -1,6 +1,5 @@
-# Docker 镜像构建文件
-
-FROM node:20-alpine
+# infinite-chat Dockerfile
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
@@ -8,12 +7,18 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
 
-# 复制代码
+# 复制编译后的代码
 COPY dist/ ./dist/
-COPY src/webui/ ./dist/webui/
+
+# 创建配置和数据目录
+RUN mkdir -p /app/config /app/data
 
 # 暴露端口
 EXPOSE 3000
 
+# 环境变量
+ENV NODE_ENV=production
+ENV TZ=Asia/Shanghai
+
 # 启动命令
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/test-start.js"]

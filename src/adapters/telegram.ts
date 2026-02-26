@@ -37,9 +37,20 @@ export class TelegramAdapter extends PlatformAdapter {
       }
     });
     
-    // 启动 bot
-    await this.bot.start();
-    console.log(`[${this.name}] Bot started`);
+    // 启动 bot (使用 polling 模式)
+    try {
+      // 先测试 bot token 是否有效
+      const me = await this.bot.api.getMe();
+      console.log(`[Telegram] Bot: @${me.username}`);
+      
+      // 开始 polling
+      this.bot.start({
+        onStart: () => console.log('[Telegram] Bot started'),
+      });
+    } catch (error) {
+      console.error('[Telegram] Failed to start bot:', error);
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {

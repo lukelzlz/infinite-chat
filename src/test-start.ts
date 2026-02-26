@@ -1,22 +1,43 @@
-// 简单测试启动脚本
-import { ChatBotEngine, WebAdapter } from './index';
+// Docker 启动脚本
+import { ChatBotEngine, TelegramAdapter, WebAdapter, createEngineFromConfig } from './index';
 import { FrameworkConfig } from './core/types';
+import * as path from 'path';
 
 async function main() {
-  console.log('🚀 Starting infinite-chat test...\n');
+  console.log('🚀 Starting infinite-chat...\n');
 
-  // 配置
+  // 从配置文件加载
+  const configPath = process.env.CONFIG_PATH || path.join(__dirname, '../config/config.yaml');
+  
+  try {
+    const engine = await createEngineFromConfig(configPath);
+    await engine.start();
+    
+    console.log('\n✅ infinite-chat started!');
+    console.log('📱 Telegram bot is running');
+    console.log('🌐 Web UI: http://localhost:3000\n');
+  } catch (e) {
+    console.error('Failed to start:', e);
+    
+    // 回退到环境变量配置
+    console.log('\n尝试使用环境变量配置...');
+    await startWithEnv();
+  }
+}
+
+async function startWithEnv() {
   const config: FrameworkConfig = {
     llm: {
-      provider: 'siliconflow',
-      model: 'deepseek-ai/DeepSeek-V3',
-      apiKey: process.env.SILICONFLOW_API_KEY || process.env.OPENAI_API_KEY || '',
-      maxTokens: 2048,
-      temperature: 0.7,
+      provider: 'custom',
+      model: process.env.LLM_MODEL || 'gpt-4o',
+      baseUrl: process.env.LLM_BASE_URL,
+      apiKey: process.env.LLM_API_KEY,
+      maxTokens: parseInt(process.env.LLM_MAX_TOKENS || '4096'),
+      temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.7'),
     },
     memory: {
-      shortTermWindow: 10,
-      compressThreshold: 30,
+      shortTermWindow: 20,
+      compressThreshold: 50,
     },
     agents: {
       enabled: true,
@@ -24,48 +45,40 @@ async function main() {
         {
           id: 'assistant',
           name: '小助手',
-          description: '通用助手，活泼友好',
-          systemPrompt: '你是一个活泼友好的AI助手，叫小助手。喜欢用颜文字，回复简洁有趣。',
-          triggers: ['小助手', '助手'],
+          description: '活泼友好的AI助手',
+          systemPrompt: '你是一个活泼、友好的AI助手。喜欢用颜文字，回复简洁有趣。',
           isDefault: true,
-        },
-        {
-          id: 'coder',
-          name: '程序员',
-          description: '代码专家',
-          systemPrompt: '你是一个专业的程序员助手。精通各种编程语言，提供高质量的代码建议。',
-          triggers: ['代码', '编程', 'bug'],
         },
       ],
       groupChat: {
-        enabled: true,
-        agentInteraction: true,
+        enabled: false,
+        agentInteraction: false,
         maxAgentChain: 2,
         chainThreshold: 0.5,
       },
     },
-    adapters: [
-      {
-        type: 'web',
-        enabled: true,
-        config: { port: 3000 },
-      },
-    ],
+    adapters: [],
   };
 
-  // 创建引擎
   const engine = new ChatBotEngine(config);
 
-  // 注册 Web 适配器
-  const webAdapter = new WebAdapter({ port: 3000 });
-  engine.registerAdapter(webAdapter);
+  // Telegram
+  if (process.env.TELEGRAM_BOT_TOKEN) {
+    const telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN);
+    engine.registerAdapter(telegram);
+    console.log('✅ Telegram adapter registered');
+  }
 
-  // 启动引擎
+  // Web
+  const webPort = parseInt(process.env.PORT || '3000');
+  const web = new WebAdapter({ port: webPort });
+  engine.registerAdapter(web);
+  console.log(`✅ Web adapter registered (port ${webPort})`);
+
   await engine.start();
 
   console.log('\n✅ infinite-chat started!');
-  console.log('📱 Open http://localhost:3000 in your browser\n');
-  console.log('Press Ctrl+C to stop\n');
+  console.log(`🌐 Web UI: http://localhost:${webPort}\n`);
 }
 
 main().catch(console.error);
