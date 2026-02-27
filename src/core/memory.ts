@@ -52,9 +52,9 @@ export class Mem0Manager {
   private async initClient(): Promise<void> {
     try {
       // 动态加载 mem0ai SDK（可选依赖）
-      // 使用 Function 构造函数绕过 TypeScript 静态检查
-      const dynamicImport = new Function('module', 'return import(module)');
-      const mem0Module = await dynamicImport('mem0ai').catch(() => null);
+      // 使用标准动态 import 语法
+      // @ts-ignore - mem0ai 是可选依赖，可能未安装
+      const mem0Module = await import('mem0ai').catch(() => null);
       if (mem0Module && mem0Module.Mem0) {
         this.client = new mem0Module.Mem0({
           apiKey: this.config.apiKey,

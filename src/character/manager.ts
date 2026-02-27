@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { CharacterCard, CharacterImportResult, CharacterExportOptions } from './types';
+import { validateUrl, safeJsonParse } from '../utils/security';
 
 type CharacterChangeListener = (event: {
   type: 'add' | 'update' | 'delete';
@@ -42,24 +43,29 @@ export class CharacterManager {
    */
   loadAll(): void {
     const files = fs.readdirSync(this.charactersDir);
-    
+
     for (const file of files) {
       if (file.endsWith('.json')) {
         try {
           const filePath = path.join(this.charactersDir, file);
           const content = fs.readFileSync(filePath, 'utf-8');
-          const character = JSON.parse(content) as CharacterCard;
-          
+          const character = safeJsonParse<CharacterCard | null>(content, null);
+
+          if (!character) {
+            console.error(`[CharacterManager] Failed to parse ${file}: Invalid JSON`);
+            continue;
+          }
+
           const id = this.getCharacterId(character);
           this.characters.set(id, character);
-          
+
           console.log(`[CharacterManager] Loaded: ${character.name}`);
         } catch (e) {
           console.error(`[CharacterManager] Failed to load ${file}:`, e);
         }
       }
     }
-    
+
     console.log(`[CharacterManager] Loaded ${this.characters.size} characters`);
   }
 
@@ -72,22 +78,28 @@ export class CharacterManager {
     this.watcher = fs.watch(this.charactersDir, (eventType, filename) => {
       if (filename && filename.endsWith('.json')) {
         const filePath = path.join(this.charactersDir, filename);
-        
+
         setTimeout(() => {
           if (fs.existsSync(filePath)) {
             try {
               const content = fs.readFileSync(filePath, 'utf-8');
-              const character = JSON.parse(content) as CharacterCard;
+              const character = safeJsonParse<CharacterCard | null>(content, null);
+
+              if (!character) {
+                console.error(`[CharacterManager] Hot reload failed: Invalid JSON`);
+                return;
+              }
+
               const id = this.getCharacterId(character);
-              
+
               const existing = this.characters.get(id);
               this.characters.set(id, character);
-              
+
               this.notifyListeners({
                 type: existing ? 'update' : 'add',
                 character,
               });
-              
+
               console.log(`[CharacterManager] Hot reload: ${character.name}`);
             } catch (e) {
               console.error(`[CharacterManager] Hot reload failed:`, e);
@@ -181,7 +193,11 @@ export class CharacterManager {
    */
   async importFromJSON(jsonContent: string): Promise<CharacterImportResult> {
     try {
-      const data = JSON.parse(jsonContent);
+      const data = safeJsonParse<any>(jsonContent, null);
+
+      if (!data) {
+        return { success: false, error: 'Invalid JSON content' };
+      }
       
       // 检测格式
       let character: CharacterCard;
@@ -227,7 +243,17 @@ export class CharacterManager {
    */
   async importFromURL(url: string): Promise<CharacterImportResult> {
     try {
-      const response = await fetch(url);
+      // 驗證 URL（SSRF 防護）
+      const urlValidation = validateUrl(url, {
+        allowPrivateIp: false,
+        blockedHosts: ['localhost', '127.0.0.1', 'metadata.google.internal'],
+      });
+
+      if (!urlValidation.valid) {
+        return { success: false, error: `URL 验证失败: ${urlValidation.error}` };
+      }
+
+      const response = await fetch(urlValidation.normalizedUrl!);
       const content = await response.text();
       
       // 检测内容类型

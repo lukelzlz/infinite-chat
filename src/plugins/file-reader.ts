@@ -1,12 +1,13 @@
 import { Plugin } from './types';
 import { Session } from '../core/types';
 import { getRAGService } from '../rag';
+import { validateFilePath } from '../utils/security';
 import fs from 'fs';
 import path from 'path';
 
 /**
  * 文件读取插件
- * 
+ *
  * 命令：
  * - /file read <文件路径> - 读取文件内容
  * - /file load <文件路径> - 读取文件并添加到知识库
@@ -27,6 +28,18 @@ export class FileReaderPlugin implements Plugin {
 
   // 最大文件大小 (5MB)
   private maxFileSize = 5 * 1024 * 1024;
+
+  // 允许访问的基础目录（安全限制）
+  // 默认只允许当前工作目录和用户主目录
+  private allowedBaseDirs: string[];
+
+  constructor(options: { allowedBaseDirs?: string[] } = {}) {
+    // 設置允許的基礎目錄
+    this.allowedBaseDirs = options.allowedBaseDirs || [
+      process.cwd(),
+      process.env.HOME || process.cwd(),
+    ];
+  }
 
   shouldHandle(content: string, session: Session): boolean {
     return content.startsWith('/file');
@@ -136,7 +149,13 @@ ${displayContent}`;
 
   private async handleList(args: string[]): Promise<string> {
     const dirPath = args.length > 1 ? args.slice(1).join(' ') : '.';
-    
+
+    // 安全检查目录路径
+    const pathValidation = validateFilePath(dirPath, this.allowedBaseDirs);
+    if (!pathValidation.valid) {
+      return `❌ ${pathValidation.error || '路径无效'}`;
+    }
+
     try {
       const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
       
@@ -168,25 +187,25 @@ ${displayContent}`;
     // 检查扩展名
     const ext = path.extname(filePath).toLowerCase();
     if (ext && !this.allowedExtensions.has(ext)) {
-      return { 
-        safe: false, 
-        reason: `不支持的文件类型: ${ext}。支持的类型: ${Array.from(this.allowedExtensions).join(', ')}` 
+      return {
+        safe: false,
+        reason: `不支持的文件类型: ${ext}。支持的类型: ${Array.from(this.allowedExtensions).join(', ')}`
       };
     }
 
-    // 检查路径遍历攻击
-    const resolved = path.resolve(filePath);
-    if (resolved.includes('..')) {
-      return { safe: false, reason: '路径不能包含 ..' };
+    // 使用安全的路径验证（防止路径遍历攻击）
+    const pathValidation = validateFilePath(filePath, this.allowedBaseDirs);
+    if (!pathValidation.valid) {
+      return { safe: false, reason: pathValidation.error || '路径无效' };
     }
 
     // 检查文件大小（同步检查，如果文件存在）
     try {
       const stats = fs.statSync(filePath);
       if (stats.size > this.maxFileSize) {
-        return { 
-          safe: false, 
-          reason: `文件过大: ${this.formatSize(stats.size)}，最大支持 ${this.formatSize(this.maxFileSize)}` 
+        return {
+          safe: false,
+          reason: `文件过大: ${this.formatSize(stats.size)}，最大支持 ${this.formatSize(this.maxFileSize)}`
         };
       }
     } catch {

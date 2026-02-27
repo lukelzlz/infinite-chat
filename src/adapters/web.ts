@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { PlatformAdapter } from './base';
 import { IncomingMessage } from '../core/types';
 import path from 'path';
-import { generateSecureId, safeJsonParse } from '../utils/security';
+import { generateSecureId, safeJsonParse, validateUrl, constantTimeCompare } from '../utils/security';
 import * as crypto from 'crypto';
 
 interface WebMessage {
@@ -152,17 +152,18 @@ export class WebAdapter extends PlatformAdapter {
     // 登录
     this.app.post('/api/auth/login', (req, res) => {
       const { password } = req.body;
-      
+
       if (!this.authConfig.enabled) {
         // 鉴权未启用，直接返回成功
         res.json({ success: true, authEnabled: false });
         return;
       }
-      
-      if (password === this.authConfig.adminPassword) {
+
+      // 使用常量時間比較防止時序攻擊
+      if (this.authConfig.adminPassword && constantTimeCompare(password, this.authConfig.adminPassword)) {
         const token = this.generateToken();
-        res.json({ 
-          success: true, 
+        res.json({
+          success: true,
           token,
           authEnabled: true,
           expiresIn: this.authConfig.tokenExpiry || 86400,
@@ -310,16 +311,27 @@ export class WebAdapter extends PlatformAdapter {
       try {
         const { getCharacterManager } = await import('../character');
         const charManager = getCharacterManager();
-        
+
         if (!charManager) {
           res.json({ error: 'Character system not initialized' });
           return;
         }
-        
+
         const { url, json } = req.body;
-        
+
         if (url) {
-          const result = await charManager.importFromURL(url);
+          // SSRF 防護：驗證 URL
+          const urlValidation = validateUrl(url, {
+            allowPrivateIp: false,
+            blockedHosts: ['localhost', '127.0.0.1', 'metadata.google.internal'],
+          });
+
+          if (!urlValidation.valid) {
+            res.json({ error: `URL 验证失败: ${urlValidation.error}` });
+            return;
+          }
+
+          const result = await charManager.importFromURL(urlValidation.normalizedUrl!);
           res.json(result);
         } else if (json) {
           const result = await charManager.importFromJSON(json);

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { generateSecureId, safeJsonParse } from '../utils/security';
 
 /**
  * 文档块
@@ -223,10 +224,10 @@ export class DocumentProcessor {
   }
 
   /**
-   * 生成 ID
+   * 生成 ID（使用加密安全的随机数）
    */
   private generateId(): string {
-    return `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return `doc-${Date.now()}-${generateSecureId(8)}`;
   }
 
   /**
@@ -287,16 +288,24 @@ export class SimpleVectorStore {
     const indexPath = path.join(this.dataDir, 'index.json');
     try {
       const content = await fs.promises.readFile(indexPath, 'utf-8');
-      const data = JSON.parse(content);
-      
+      const data = safeJsonParse<{
+        documents: [string, Document][];
+        savedAt: number;
+      } | null>(content, null);
+
+      if (!data) {
+        console.error('[VectorStore] Invalid JSON in index file');
+        return;
+      }
+
       this.documents.clear();
       this.chunkIndex.clear();
-      
+
       for (const [id, doc] of data.documents) {
         this.documents.set(id, doc);
         this.chunkIndex.set(id, doc.chunks);
       }
-      
+
       console.log(`[VectorStore] Loaded ${this.documents.size} documents from disk`);
     } catch (error: any) {
       if (error.code !== 'ENOENT') {
