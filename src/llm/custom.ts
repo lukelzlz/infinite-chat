@@ -1,5 +1,6 @@
 import { Message, LLMConfig, CustomModelConfig } from '../core/types';
 import { LLMProvider } from './base';
+import { validateUrl } from '../utils/security';
 
 // 动态导入 OpenAI
 let OpenAI: any = null;
@@ -30,6 +31,7 @@ export class CustomModelProvider extends LLMProvider {
   private client: any = null;
   private customConfig: CustomModelConfig;
   private initPromise: Promise<void> | null = null;
+  private validatedBaseUrl: string;
 
   constructor(config: LLMConfig, customConfig?: CustomModelConfig) {
     super(config);
@@ -37,6 +39,16 @@ export class CustomModelProvider extends LLMProvider {
       baseUrl: config.baseUrl || '',
       model: config.model,
     };
+
+    // 验证 baseUrl 防止 SSRF 攻击
+    const urlValidation = validateUrl(this.customConfig.baseUrl, { allowPrivateIp: true }); // 自定义模型可能使用私有地址
+    if (!urlValidation.valid) {
+      console.warn(`[CustomModel] Invalid baseUrl: ${urlValidation.error}`);
+      this.validatedBaseUrl = this.customConfig.baseUrl; // 保留原值，但会记录警告
+    } else {
+      this.validatedBaseUrl = urlValidation.normalizedUrl!;
+    }
+
     // 启动初始化
     this.initPromise = this.initClient();
   }
@@ -46,9 +58,9 @@ export class CustomModelProvider extends LLMProvider {
       const OpenAIClass = await getOpenAI();
       this.client = new OpenAIClass({
         apiKey: this.config.apiKey,
-        baseURL: this.customConfig.baseUrl,
+        baseURL: this.validatedBaseUrl,
       });
-      console.log(`[CustomModel] Client initialized for ${this.customConfig.baseUrl}`);
+      console.log(`[CustomModel] Client initialized for ${this.validatedBaseUrl}`);
     } catch (e) {
       console.error('[CustomModel] OpenAI SDK not found. Run: npm install openai');
       throw e;

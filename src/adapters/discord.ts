@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Events, Message, TextChannel } from 'discord.js';
 import { PlatformAdapter } from './base';
 import { IncomingMessage, MessageAttachment } from '../core/types';
+import { validateUrl } from '../utils/security';
 
 export class DiscordAdapter extends PlatformAdapter {
   name = 'discord';
@@ -81,7 +82,9 @@ export class DiscordAdapter extends PlatformAdapter {
     });
 
     this.client.on(Events.Error, (error) => {
-      console.error(`[${this.name}] Client error:`, error);
+      // 安全地记录错误，避免泄露敏感信息
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[${this.name}] Client error:`, errorMsg);
     });
 
     await this.client.login(this.token);
@@ -107,8 +110,9 @@ export class DiscordAdapter extends PlatformAdapter {
         });
       }
     } catch (error) {
-      console.error(`[${this.name}] Send failed:`, error);
-      throw error;
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[${this.name}] Send failed:`, errorMsg);
+      throw new Error(`Send message failed`);
     }
   }
 
@@ -117,17 +121,23 @@ export class DiscordAdapter extends PlatformAdapter {
    */
   async downloadFile(url: string): Promise<{ content: Buffer; filename?: string }> {
     try {
-      const response = await fetch(url);
+      // 验证 URL 防止 SSRF 攻击
+      const urlValidation = validateUrl(url, { allowPrivateIp: false });
+      if (!urlValidation.valid) {
+        throw new Error(`Invalid URL: ${urlValidation.error}`);
+      }
+
+      const response = await fetch(urlValidation.normalizedUrl!);
       if (!response.ok) {
         throw new Error(`Download failed: ${response.statusText}`);
       }
-      
+
       const content = Buffer.from(await response.arrayBuffer());
       const filename = url.split('/').pop()?.split('?')[0];
-      
+
       return { content, filename };
     } catch (error) {
-      console.error('[Discord] Download file error:', error);
+      console.error('[Discord] Download file error:', error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }

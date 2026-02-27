@@ -1,5 +1,5 @@
 import { Message, LLMConfig } from '../core/types';
-import { safeJsonParse } from '../utils/security';
+import { safeJsonParse, validateUrl } from '../utils/security';
 import { LLMProvider } from './base';
 import { CustomModelProvider, createCustomModelProvider, getPresetModelConfig } from './custom';
 
@@ -190,6 +190,21 @@ export class AnthropicProvider extends LLMProvider {
  * 本地模型提供者 (Ollama / LM Studio)
  */
 export class LocalModelProvider extends LLMProvider {
+  private validatedBaseUrl: string;
+
+  constructor(config: LLMConfig) {
+    super(config);
+    // 验证 baseUrl 防止 SSRF 攻击
+    const baseUrl = this.config.baseUrl || 'http://localhost:11434';
+    const urlValidation = validateUrl(baseUrl, { allowPrivateIp: true }); // 本地模型允许私有 IP
+    if (!urlValidation.valid) {
+      console.warn(`[LocalModel] Invalid baseUrl: ${urlValidation.error}, using default`);
+      this.validatedBaseUrl = 'http://localhost:11434';
+    } else {
+      this.validatedBaseUrl = urlValidation.normalizedUrl!;
+    }
+  }
+
   async chat(
     messages: Message[],
     options?: {
@@ -198,10 +213,8 @@ export class LocalModelProvider extends LLMProvider {
       temperature?: number;
     }
   ): Promise<string> {
-    const baseUrl = this.config.baseUrl || 'http://localhost:11434';
-    
     const formattedMessages: any[] = [];
-    
+
     if (options?.systemPrompt) {
       formattedMessages.push({
         role: 'system',
@@ -217,7 +230,7 @@ export class LocalModelProvider extends LLMProvider {
     }
 
     // Ollama API
-    const response = await fetch(`${baseUrl}/api/chat`, {
+    const response = await fetch(`${this.validatedBaseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -244,10 +257,8 @@ export class LocalModelProvider extends LLMProvider {
       temperature?: number;
     }
   ): Promise<string> {
-    const baseUrl = this.config.baseUrl || 'http://localhost:11434';
-    
     const formattedMessages: any[] = [];
-    
+
     if (options?.systemPrompt) {
       formattedMessages.push({
         role: 'system',
@@ -262,7 +273,7 @@ export class LocalModelProvider extends LLMProvider {
       });
     }
 
-    const response = await fetch(`${baseUrl}/api/chat`, {
+    const response = await fetch(`${this.validatedBaseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

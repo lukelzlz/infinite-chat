@@ -1,6 +1,7 @@
 import { Bot, Context, GrammyError } from 'grammy';
 import { PlatformAdapter } from './base';
 import { IncomingMessage, MessageAttachment } from '../core/types';
+import { validateUrl } from '../utils/security';
 
 export class TelegramAdapter extends PlatformAdapter {
   name = 'telegram';
@@ -136,19 +137,24 @@ export class TelegramAdapter extends PlatformAdapter {
       console.log(`[Telegram] Sent message to ${chatId}`);
     } catch (error) {
       if (error instanceof GrammyError) {
+        // 安全地记录错误，避免泄露敏感信息
         console.error(`[${this.name}] Send failed:`, error.description);
-        
+
         // 如果 Markdown 解析失败，尝试纯文本
         if (error.description.includes('parse')) {
           try {
             await this.bot.api.sendMessage(chatId, message, options);
             return;
           } catch (e) {
-            console.error(`[${this.name}] Plain text also failed:`, e);
+            const innerMsg = e instanceof Error ? e.message : 'Unknown error';
+            console.error(`[${this.name}] Plain text also failed:`, innerMsg);
           }
         }
+      } else {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`[${this.name}] Send failed:`, errorMsg);
       }
-      throw error;
+      throw new Error(`Send message failed`);
     }
   }
 
@@ -191,29 +197,35 @@ export class TelegramAdapter extends PlatformAdapter {
     try {
       // 获取文件信息
       const file = await this.bot.api.getFile(fileId);
-      
+
       if (!file.file_path) {
         throw new Error('File path not available');
       }
-      
+
       // 构建下载 URL
       const downloadUrl = `https://api.telegram.org/file/bot${this.token}/${file.file_path}`;
-      
+
+      // 验证 URL 防止 SSRF 攻击
+      const urlValidation = validateUrl(downloadUrl, { allowPrivateIp: false });
+      if (!urlValidation.valid) {
+        throw new Error(`Invalid download URL: ${urlValidation.error}`);
+      }
+
       // 下载文件
-      const response = await fetch(downloadUrl);
+      const response = await fetch(urlValidation.normalizedUrl!);
       if (!response.ok) {
         throw new Error(`Download failed: ${response.statusText}`);
       }
-      
+
       const content = Buffer.from(await response.arrayBuffer());
-      
+
       return {
         content,
         filename: file.file_path.split('/').pop(),
         mimeType: undefined, // Telegram 不提供 mime type
       };
     } catch (error) {
-      console.error('[Telegram] Download file error:', error);
+      console.error('[Telegram] Download file error:', error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }

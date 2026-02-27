@@ -7,7 +7,7 @@ import { LLMProvider, createLLMProvider } from '../llm';
 import { PlatformAdapter } from '../adapters/base';
 import { Plugin, PluginManager } from '../plugins';
 import { PermissionManager, getPermissionManager } from '../permission';
-import { generateSecureId } from '../utils/security';
+import { generateSecureId, validateUrl } from '../utils/security';
 import { RAGService, getRAGService } from '../rag';
 
 /**
@@ -384,8 +384,13 @@ export class ChatBotEngine {
           const fileData = await (adapter as any).downloadFile(attachment.fileId);
           content = fileData.content.toString('utf-8');
         } else if (session.platform === 'discord' && attachment.url) {
-          // Discord 文件通过 URL 下载
-          const response = await fetch(attachment.url);
+          // Discord 文件通过 URL 下载 - 验证 URL 防止 SSRF
+          const urlValidation = validateUrl(attachment.url, { allowPrivateIp: false });
+          if (!urlValidation.valid) {
+            results.push(`❌ ${attachment.filename}: 无效的文件 URL`);
+            continue;
+          }
+          const response = await fetch(urlValidation.normalizedUrl!);
           if (!response.ok) {
             throw new Error(`Download failed: ${response.statusText}`);
           }

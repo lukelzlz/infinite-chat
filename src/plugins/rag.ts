@@ -1,10 +1,11 @@
 import { Plugin } from './types';
 import { Session } from '../core/types';
 import { getRAGService } from '../rag';
+import { validateInputLength } from '../utils/security';
 
 /**
  * RAG 文档管理插件
- * 
+ *
  * 命令：
  * - /rag upload <文件名> <内容> - 上传文档
  * - /rag import - 回复消息导入（回复某条消息，将其导入知识库）
@@ -17,6 +18,10 @@ export class RAGPlugin implements Plugin {
   name = 'rag';
   priority = 50;
   description = 'RAG 文档管理和检索';
+
+  // 输入长度限制
+  private maxContentLength = 100000; // 100KB 文档内容
+  private maxQueryLength = 500; // 搜索查询最大长度
 
   shouldHandle(content: string, session: Session): boolean {
     return content.startsWith('/rag') || content === '/import';
@@ -92,8 +97,14 @@ export class RAGPlugin implements Plugin {
     const filename = args[1];
     const docContent = args.slice(2).join(' ');
 
+    // 验证文档内容长度
+    const lengthCheck = validateInputLength(docContent, this.maxContentLength, '文档内容');
+    if (!lengthCheck.valid) {
+      return `❌ ${lengthCheck.error}`;
+    }
+
     const doc = await rag.uploadDocument(docContent, filename);
-    
+
     return `✅ 文档上传成功！
 
 📄 文件名: ${doc.filename}
@@ -126,6 +137,13 @@ export class RAGPlugin implements Plugin {
     }
 
     const query = args.slice(1).join(' ');
+
+    // 验证查询长度
+    const lengthCheck = validateInputLength(query, this.maxQueryLength, '搜索关键词');
+    if (!lengthCheck.valid) {
+      return `❌ ${lengthCheck.error}`;
+    }
+
     const results = await rag.search(query, 5);
 
     if (results.length === 0) {
@@ -133,8 +151,8 @@ export class RAGPlugin implements Plugin {
     }
 
     const lines = results.map((r, i) => {
-      const preview = r.content.length > 200 
-        ? r.content.slice(0, 200) + '...' 
+      const preview = r.content.length > 200
+        ? r.content.slice(0, 200) + '...'
         : r.content;
       return `【${i + 1}】相关度: ${(r.score * 100).toFixed(1)}%
 📄 来源: ${r.source}

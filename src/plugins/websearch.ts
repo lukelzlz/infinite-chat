@@ -1,6 +1,7 @@
 import { Plugin } from './types';
 import { BrowserTool } from '../tools/browser';
 import { Session } from '../core/types';
+import { validateInputLength } from '../utils/security';
 
 /**
  * 网页搜索插件
@@ -9,7 +10,10 @@ export class WebSearchPlugin implements Plugin {
   name = 'websearch';
   priority = 50;
   description = '搜索网页';
-  
+
+  // 最大搜索查询长度
+  private maxQueryLength = 200;
+
   private browser: BrowserTool;
 
   constructor(config?: { serverUrl?: string; authToken?: string }) {
@@ -17,30 +21,37 @@ export class WebSearchPlugin implements Plugin {
   }
 
   shouldHandle(content: string, session: Session): boolean {
-    return content.startsWith('/search ') || 
-           content.startsWith('/bing ') || 
+    return content.startsWith('/search ') ||
+           content.startsWith('/bing ') ||
            content.startsWith('/baidu ');
   }
 
   async handle(content: string, session: Session): Promise<string> {
     const trimmed = content.trim();
 
+    let query = '';
+    let searchFn: (q: string) => Promise<string>;
+
     if (trimmed.startsWith('/search ')) {
-      const query = trimmed.slice(8).trim();
-      return this.bingSearch(query);
+      query = trimmed.slice(8).trim();
+      searchFn = this.bingSearch.bind(this);
+    } else if (trimmed.startsWith('/bing ')) {
+      query = trimmed.slice(6).trim();
+      searchFn = this.bingSearch.bind(this);
+    } else if (trimmed.startsWith('/baidu ')) {
+      query = trimmed.slice(7).trim();
+      searchFn = this.baiduSearch.bind(this);
+    } else {
+      return '未知命令';
     }
 
-    if (trimmed.startsWith('/bing ')) {
-      const query = trimmed.slice(6).trim();
-      return this.bingSearch(query);
+    // 验证查询长度
+    const lengthCheck = validateInputLength(query, this.maxQueryLength, '搜索关键词');
+    if (!lengthCheck.valid) {
+      return `❌ ${lengthCheck.error}`;
     }
 
-    if (trimmed.startsWith('/baidu ')) {
-      const query = trimmed.slice(7).trim();
-      return this.baiduSearch(query);
-    }
-
-    return '未知命令';
+    return searchFn(query);
   }
 
   /**

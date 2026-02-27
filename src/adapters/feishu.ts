@@ -53,14 +53,17 @@ export class FeishuAdapter extends PlatformAdapter {
         app_secret: this.appSecret,
       }),
     });
-    
-    const data = await res.json() as any;
+
+    const data = safeJsonParse<{ code?: number; msg?: string; tenant_access_token?: string; expire?: number }>(
+      await res.text(),
+      {}
+    );
     if (data.code !== 0) {
       throw new Error(`[${this.name}] Failed to get token: ${data.msg}`);
     }
-    
+
     this.tenantAccessToken = data.tenant_access_token;
-    this.tokenExpireAt = Date.now() + (data.expire - 60) * 1000; // 提前 60 秒刷新
+    this.tokenExpireAt = Date.now() + ((data.expire || 7200) - 60) * 1000; // 提前 60 秒刷新
   }
 
   /** 确保 token 有效 */
@@ -125,12 +128,12 @@ export class FeishuAdapter extends PlatformAdapter {
 
   async sendMessage(sessionId: string, message: string, options?: any): Promise<void> {
     const token = await this.ensureToken();
-    
+
     // 解析 sessionId 获取 open_id
     const parts = sessionId.split(':');
     const receiveId = parts[1];
     const chatType = parts.length > 2 && parts[0] === 'group' ? 'group' : 'p2p';
-    
+
     try {
       const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
         method: 'POST',
@@ -144,27 +147,27 @@ export class FeishuAdapter extends PlatformAdapter {
           content: JSON.stringify({ text: message }),
         }),
       });
-      
-      const data = await res.json() as any;
+
+      const data = safeJsonParse<{ code?: number; msg?: string }>(await res.text(), {});
       if (data.code !== 0) {
         throw new Error(`[${this.name}] Send failed: ${data.msg}`);
       }
     } catch (error) {
-      console.error(`[${this.name}] Send failed:`, error);
+      console.error(`[${this.name}] Send failed:`, error instanceof Error ? error.message : 'Unknown error');
       throw error;
     }
   }
 
   /** 发送富文本消息 */
   async sendRichMessage(
-    sessionId: string, 
+    sessionId: string,
     content: Record<string, any>,
     options?: any
   ): Promise<void> {
     const token = await this.ensureToken();
     const parts = sessionId.split(':');
     const receiveId = parts[1];
-    
+
     const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
       method: 'POST',
       headers: {
@@ -177,8 +180,8 @@ export class FeishuAdapter extends PlatformAdapter {
         content: JSON.stringify(content),
       }),
     });
-    
-    const data = await res.json() as any;
+
+    const data = safeJsonParse<{ code?: number; msg?: string }>(await res.text(), {});
     if (data.code !== 0) {
       throw new Error(`[${this.name}] Send rich message failed: ${data.msg}`);
     }
@@ -192,7 +195,7 @@ export class FeishuAdapter extends PlatformAdapter {
     const token = await this.ensureToken();
     const parts = sessionId.split(':');
     const receiveId = parts[1];
-    
+
     const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
       method: 'POST',
       headers: {
@@ -205,8 +208,8 @@ export class FeishuAdapter extends PlatformAdapter {
         content: JSON.stringify(card),
       }),
     });
-    
-    const data = await res.json() as any;
+
+    const data = safeJsonParse<{ code?: number; msg?: string }>(await res.text(), {});
     if (data.code !== 0) {
       throw new Error(`[${this.name}] Send card failed: ${data.msg}`);
     }
