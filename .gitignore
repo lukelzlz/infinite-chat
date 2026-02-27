@@ -7,3 +7,4 @@ dist/
 config/config.yaml
 *.tsbuildinfo
 .DS_Store
+data/
