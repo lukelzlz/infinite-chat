@@ -1,10 +1,10 @@
 import { PlatformAdapter } from './base';
 import { IncomingMessage } from '../core/types';
-import { safeJsonParse, sanitizeHtml } from '../utils/security';
+import { safeJsonParse, sanitizeHtml, validateUrl } from '../utils/security';
 
 /**
  * Misskey 平台适配器
- * 
+ *
  * 支持功能：
  * - 接收 note（帖子）和回复
  * - 群聊支持
@@ -12,7 +12,7 @@ import { safeJsonParse, sanitizeHtml } from '../utils/security';
  */
 export class MisskeyAdapter extends PlatformAdapter {
   name = 'misskey';
-  
+
   private instanceUrl: string;
   private token: string;
   private ws: WebSocket | null = null;
@@ -24,7 +24,18 @@ export class MisskeyAdapter extends PlatformAdapter {
     token: string;        // API Token
   }) {
     super();
-    this.instanceUrl = config.instanceUrl.replace(/\/$/, '');
+
+    // SSRF 防护：验证 instanceUrl
+    const urlValidation = validateUrl(config.instanceUrl, {
+      allowPrivateIp: false,
+      blockedHosts: ['localhost', '127.0.0.1', 'metadata.google.internal', '169.254.169.254'],
+    });
+
+    if (!urlValidation.valid) {
+      throw new Error(`Invalid Misskey instance URL: ${urlValidation.error}`);
+    }
+
+    this.instanceUrl = urlValidation.normalizedUrl!.replace(/\/$/, '');
     this.token = config.token;
   }
 

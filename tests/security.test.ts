@@ -277,4 +277,61 @@ describe('Security Utils', () => {
       expect(validateFilePath('/etc/passwd', ['/app/config']).valid).toBe(false);
     });
   });
+
+  describe('IPv6 localhost protection', () => {
+    it('should reject IPv6 localhost addresses', () => {
+      expect(validateUrl('http://[::1]/admin').valid).toBe(false);
+      expect(validateUrl('http://[0:0:0:0:0:0:0:1]/admin').valid).toBe(false);
+    });
+  });
+
+  describe('Cloud metadata endpoint protection', () => {
+    it('should reject AWS metadata endpoint', () => {
+      expect(validateUrl('http://169.254.169.254/latest/meta-data/').valid).toBe(false);
+    });
+
+    it('should reject GCP metadata endpoint', () => {
+      expect(validateUrl('http://metadata.google.internal/computeMetadata/v1/').valid).toBe(false);
+    });
+
+    it('should reject Azure metadata endpoint', () => {
+      expect(validateUrl('http://169.254.169.254/metadata/instance').valid).toBe(false);
+    });
+  });
+
+  describe('URL redirect protection', () => {
+    it('should normalize URLs correctly', () => {
+      const result = validateUrl('  https://example.com/path  ');
+      expect(result.valid).toBe(true);
+      expect(result.normalizedUrl).toBe('https://example.com/path');
+    });
+
+    it('should handle protocol-relative URLs', () => {
+      // Without protocol, it should add https://
+      const result = validateUrl('example.com/path');
+      expect(result.valid).toBe(true);
+      expect(result.normalizedUrl).toBe('https://example.com/path');
+    });
+  });
+
+  describe('Data URI protection', () => {
+    it('should reject data URIs', () => {
+      expect(validateUrl('data:text/html,<script>alert(1)</script>').valid).toBe(false);
+      expect(validateUrl('data:image/svg+xml,<svg onload=alert(1)>').valid).toBe(false);
+    });
+  });
+
+  describe('Multicast and reserved IP protection', () => {
+    it('should reject multicast addresses', () => {
+      expect(validateUrl('http://224.0.0.1/test').valid).toBe(false);
+    });
+
+    it('should reject reserved addresses', () => {
+      expect(validateUrl('http://240.0.0.1/test').valid).toBe(false);
+    });
+
+    it('should reject 0.0.0.0', () => {
+      expect(validateUrl('http://0.0.0.0/test').valid).toBe(false);
+    });
+  });
 });

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { generateSecureId, safeJsonParse } from '../utils/security';
+import { generateSecureId, safeJsonParse, validateFilePath } from '../utils/security';
 
 /**
  * 文档块
@@ -254,7 +254,15 @@ export class SimpleVectorStore {
   private dataDir: string;
 
   constructor(dataDir: string = './data/rag') {
-    this.dataDir = dataDir;
+    // 安全检查：验证 dataDir 路径
+    const resolvedDataDir = path.resolve(dataDir);
+
+    // 确保路径不包含危险模式
+    if (resolvedDataDir.includes('..') || resolvedDataDir.includes('\0')) {
+      throw new Error('Invalid data directory path');
+    }
+
+    this.dataDir = resolvedDataDir;
   }
 
   /**

@@ -35,10 +35,24 @@ export class FileReaderPlugin implements Plugin {
 
   constructor(options: { allowedBaseDirs?: string[] } = {}) {
     // 設置允許的基礎目錄
-    this.allowedBaseDirs = options.allowedBaseDirs || [
-      process.cwd(),
-      process.env.HOME || process.cwd(),
-    ];
+    if (options.allowedBaseDirs && options.allowedBaseDirs.length > 0) {
+      // 使用配置的目录，并解析真实路径
+      this.allowedBaseDirs = options.allowedBaseDirs.map(dir => {
+        try {
+          return fs.realpathSync(dir);
+        } catch {
+          return path.resolve(dir);
+        }
+      });
+    } else {
+      // 默认只允许当前工作目录（解析真实路径防止符号链接攻击）
+      try {
+        const cwd = fs.realpathSync(process.cwd());
+        this.allowedBaseDirs = [cwd];
+      } catch {
+        this.allowedBaseDirs = [process.cwd()];
+      }
+    }
   }
 
   shouldHandle(content: string, session: Session): boolean {

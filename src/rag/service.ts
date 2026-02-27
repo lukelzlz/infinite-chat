@@ -42,9 +42,19 @@ export class RAGService {
    */
   async uploadDocument(content: string, filename: string): Promise<Document> {
     await this.init();
-    const doc = await this.processor.processText(content, filename);
+
+    // 文档大小限制 (10MB)
+    const MAX_CONTENT_SIZE = 10 * 1024 * 1024;
+    if (content.length > MAX_CONTENT_SIZE) {
+      throw new Error(`文档过大: ${content.length} 字符 (最大 ${MAX_CONTENT_SIZE} 字符)`);
+    }
+
+    // 文件名安全检查
+    const safeFilename = filename.replace(/[^\w\u4e00-\u9fa5.-]/g, '_').slice(0, 255);
+
+    const doc = await this.processor.processText(content, safeFilename);
     await this.store.addDocument(doc);
-    console.log(`[RAG] Document uploaded: ${filename} (${doc.chunks.length} chunks)`);
+    console.log(`[RAG] Document uploaded: ${safeFilename} (${doc.chunks.length} chunks)`);
     return doc;
   }
 
