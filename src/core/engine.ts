@@ -9,6 +9,7 @@ import { Plugin, PluginManager } from '../plugins';
 import { PermissionManager, getPermissionManager } from '../permission';
 import { generateSecureId, validateUrl } from '../utils/security';
 import { RAGService, getRAGService } from '../rag';
+import { MemoryManager, initMemoryManager } from './memory-manager';
 
 /**
  * 聊天机器人引擎
@@ -24,6 +25,7 @@ export class ChatBotEngine {
   private permissionManager: PermissionManager;
   private sessions: Map<string, Session> = new Map();
   private isRunning = false;
+  private memManager: MemoryManager;
 
   constructor(config: FrameworkConfig) {
     this.config = config;
@@ -50,6 +52,13 @@ export class ChatBotEngine {
     
     // 初始化权限管理器
     this.permissionManager = getPermissionManager();
+    
+    // 初始化内存管理器（性能优化）
+    this.memManager = initMemoryManager({
+      maxSessions: 10000,
+      sessionTimeout: 24 * 60 * 60 * 1000, // 24 小时
+      cleanupInterval: 5 * 60 * 1000, // 5 分钟
+    });
   }
 
   /**
@@ -106,6 +115,12 @@ export class ChatBotEngine {
       }
     }
 
+    // 启动内存管理器清理任务（性能优化）
+    this.memManager.startCleanup(
+      () => this.sessions,
+      (sessionId) => this.clearSession(sessionId)
+    );
+
     this.isRunning = true;
     console.log('[Engine] Started');
   }
@@ -114,6 +129,9 @@ export class ChatBotEngine {
    * 停止引擎
    */
   async stop(): Promise<void> {
+    // 停止内存管理器清理
+    this.memManager.stopCleanup();
+
     for (const [name, adapter] of this.adapters) {
       try {
         await adapter.stop();
@@ -493,6 +511,7 @@ export class ChatBotEngine {
     sessions: number;
     plugins: number;
     agents: number;
+    memory?: ReturnType<MemoryManager['getStats']>;
   } {
     return {
       isRunning: this.isRunning,
@@ -500,6 +519,7 @@ export class ChatBotEngine {
       sessions: this.sessions.size,
       plugins: this.pluginManager.getPlugins().length,
       agents: this.agentManager?.getAllAgents().length || 0,
+      memory: this.memManager.getStats(this.sessions),
     };
   }
 

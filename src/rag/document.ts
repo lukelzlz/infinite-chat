@@ -33,6 +33,74 @@ export interface Document {
 }
 
 /**
+ * TF-IDF 相关性计算器（性能优化）
+ */
+class TFIDFCalculator {
+  private documentFrequency: Map<string, number> = new Map();
+  private totalDocuments: number = 0;
+
+  /**
+   * 添加文档更新 IDF
+   */
+  addDocument(tokens: Set<string>): void {
+    this.totalDocuments++;
+    for (const token of tokens) {
+      this.documentFrequency.set(
+        token,
+        (this.documentFrequency.get(token) || 0) + 1
+      );
+    }
+  }
+
+  /**
+   * 移除文档更新 IDF
+   */
+  removeDocument(tokens: Set<string>): void {
+    this.totalDocuments = Math.max(0, this.totalDocuments - 1);
+    for (const token of tokens) {
+      const freq = this.documentFrequency.get(token) || 0;
+      if (freq <= 1) {
+        this.documentFrequency.delete(token);
+      } else {
+        this.documentFrequency.set(token, freq - 1);
+      }
+    }
+  }
+
+  /**
+   * 计算 TF-IDF 分数
+   */
+  calculateScore(queryTokens: Set<string>, docTokens: Set<string>): number {
+    let score = 0;
+    
+    for (const token of queryTokens) {
+      if (docTokens.has(token)) {
+        // TF: 1 (简化处理，假设每个词在文档中最多出现一次)
+        const tf = 1;
+        
+        // IDF: log(N / df)
+        const df = this.documentFrequency.get(token) || 1;
+        const idf = Math.log(this.totalDocuments / df) + 1;
+        
+        score += tf * idf;
+      }
+    }
+    
+    return score;
+  }
+
+  /**
+   * 获取统计信息
+   */
+  getStats(): { totalDocuments: number; vocabularySize: number } {
+    return {
+      totalDocuments: this.totalDocuments,
+      vocabularySize: this.documentFrequency.size,
+    };
+  }
+}
+
+/**
  * 文档处理器
  */
 export class DocumentProcessor {
@@ -246,12 +314,14 @@ export class DocumentProcessor {
 }
 
 /**
- * 简单向量存储（支持持久化）
+ * 简单向量存储（支持持久化 + TF-IDF 优化）
  */
 export class SimpleVectorStore {
   private documents: Map<string, Document> = new Map();
   private chunkIndex: Map<string, DocumentChunk[]> = new Map(); // docId -> chunks
+  private chunkTokens: Map<string, Set<string>> = new Map(); // chunkId -> tokens (缓存)
   private dataDir: string;
+  private tfidf: TFIDFCalculator;
 
   constructor(dataDir: string = './data/rag') {
     // 安全检查：验证 dataDir 路径
@@ -263,6 +333,7 @@ export class SimpleVectorStore {
     }
 
     this.dataDir = resolvedDataDir;
+    this.tfidf = new TFIDFCalculator();
   }
 
   /**
@@ -272,6 +343,13 @@ export class SimpleVectorStore {
     try {
       await fs.promises.mkdir(this.dataDir, { recursive: true });
       await this.load();
+      
+      // 重建 TF-IDF 索引
+      for (const tokens of this.chunkTokens.values()) {
+        this.tfidf.addDocument(tokens);
+      }
+      
+      console.log(`[VectorStore] TF-IDF index rebuilt: ${this.tfidf.getStats().vocabularySize} terms`);
     } catch (error) {
       console.error('[VectorStore] Init error:', error);
     }
@@ -284,6 +362,7 @@ export class SimpleVectorStore {
     const indexPath = path.join(this.dataDir, 'index.json');
     const data = {
       documents: Array.from(this.documents.entries()),
+      chunkTokens: Array.from(this.chunkTokens.entries()).map(([id, tokens]) => [id, Array.from(tokens)]),
       savedAt: Date.now(),
     };
     await fs.promises.writeFile(indexPath, JSON.stringify(data, null, 2), 'utf-8');
@@ -298,6 +377,7 @@ export class SimpleVectorStore {
       const content = await fs.promises.readFile(indexPath, 'utf-8');
       const data = safeJsonParse<{
         documents: [string, Document][];
+        chunkTokens?: [string, string[]][];
         savedAt: number;
       } | null>(content, null);
 
@@ -308,10 +388,25 @@ export class SimpleVectorStore {
 
       this.documents.clear();
       this.chunkIndex.clear();
+      this.chunkTokens.clear();
 
       for (const [id, doc] of data.documents) {
         this.documents.set(id, doc);
         this.chunkIndex.set(id, doc.chunks);
+      }
+
+      // 加载缓存的 tokens
+      if (data.chunkTokens) {
+        for (const [id, tokens] of data.chunkTokens) {
+          this.chunkTokens.set(id, new Set(tokens));
+        }
+      } else {
+        // 旧数据格式，需要重建 tokens
+        for (const chunks of this.chunkIndex.values()) {
+          for (const chunk of chunks) {
+            this.chunkTokens.set(chunk.id, this.tokenize(chunk.content));
+          }
+        }
       }
 
       console.log(`[VectorStore] Loaded ${this.documents.size} documents from disk`);
@@ -328,6 +423,14 @@ export class SimpleVectorStore {
   async addDocument(doc: Document): Promise<void> {
     this.documents.set(doc.id, doc);
     this.chunkIndex.set(doc.id, doc.chunks);
+    
+    // 缓存 tokens 并更新 TF-IDF
+    for (const chunk of doc.chunks) {
+      const tokens = this.tokenize(chunk.content);
+      this.chunkTokens.set(chunk.id, tokens);
+      this.tfidf.addDocument(tokens);
+    }
+    
     await this.save();
   }
 
@@ -350,6 +453,19 @@ export class SimpleVectorStore {
    */
   async deleteDocument(docId: string): Promise<boolean> {
     if (!this.documents.has(docId)) return false;
+    
+    // 从 TF-IDF 中移除
+    const chunks = this.chunkIndex.get(docId);
+    if (chunks) {
+      for (const chunk of chunks) {
+        const tokens = this.chunkTokens.get(chunk.id);
+        if (tokens) {
+          this.tfidf.removeDocument(tokens);
+        }
+        this.chunkTokens.delete(chunk.id);
+      }
+    }
+    
     this.documents.delete(docId);
     this.chunkIndex.delete(docId);
     await this.save();
@@ -357,15 +473,21 @@ export class SimpleVectorStore {
   }
 
   /**
-   * 搜索相关内容（简单关键词匹配）
+   * 搜索相关内容（TF-IDF 优化）
    */
   search(query: string, topK: number = 5): Array<{ chunk: DocumentChunk; score: number }> {
     const results: Array<{ chunk: DocumentChunk; score: number }> = [];
-    const queryWords = this.tokenize(query);
+    const queryTokens = this.tokenize(query);
 
     for (const chunks of this.chunkIndex.values()) {
       for (const chunk of chunks) {
-        const score = this.calculateSimilarity(queryWords, chunk.content);
+        // 使用缓存的 tokens
+        const chunkTokens = this.chunkTokens.get(chunk.id) || this.tokenize(chunk.content);
+        if (!this.chunkTokens.has(chunk.id)) {
+          this.chunkTokens.set(chunk.id, chunkTokens);
+        }
+        
+        const score = this.tfidf.calculateScore(queryTokens, chunkTokens);
         if (score > 0) {
           results.push({ chunk, score });
         }
@@ -379,33 +501,23 @@ export class SimpleVectorStore {
   }
 
   /**
-   * 分词
+   * 分词（中英文支持）
    */
   private tokenize(text: string): Set<string> {
-    // 简单实现：按空格和标点分割
+    // 中英文分词
     const words = text
       .toLowerCase()
       .replace(/[^\w\u4e00-\u9fa5]/g, ' ')
       .split(/\s+/)
-      .filter(w => w.length > 1);
+      .filter(w => {
+        // 过滤停用词和短词
+        if (w.length <= 1) return false;
+        // 中文词至少2个字符
+        if (/[\u4e00-\u9fa5]/.test(w) && w.length < 2) return false;
+        return true;
+      });
     
     return new Set(words);
-  }
-
-  /**
-   * 计算相似度
-   */
-  private calculateSimilarity(queryWords: Set<string>, text: string): number {
-    const textWords = this.tokenize(text);
-    
-    let matches = 0;
-    for (const word of queryWords) {
-      if (textWords.has(word)) {
-        matches++;
-      }
-    }
-
-    return queryWords.size > 0 ? matches / queryWords.size : 0;
   }
 
   /**
@@ -415,6 +527,7 @@ export class SimpleVectorStore {
     documentCount: number;
     totalChunks: number;
     totalCharacters: number;
+    tfidfStats: ReturnType<TFIDFCalculator['getStats']>;
   } {
     let totalChunks = 0;
     let totalCharacters = 0;
@@ -428,6 +541,7 @@ export class SimpleVectorStore {
       documentCount: this.documents.size,
       totalChunks,
       totalCharacters,
+      tfidfStats: this.tfidf.getStats(),
     };
   }
 }
