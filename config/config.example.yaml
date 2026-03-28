@@ -99,12 +99,12 @@ adapters:
     config:
       token: "your-discord-bot-token"
   
-  # 飞书机器人
+  # 飞书机器人（长连接模式，无需公网 IP）
   - type: feishu
     enabled: false
     config:
-      appId: "your-app-id"
-      appSecret: "your-app-secret"
+      appId: "${FEISHU_APP_ID}"
+      appSecret: "${FEISHU_APP_SECRET}"
   
   # Misskey 机器人
   - type: misskey

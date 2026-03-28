@@ -1,6 +1,7 @@
 import { ChatBotEngine } from './core/engine';
 import { TelegramAdapter } from './adapters/telegram';
 import { MisskeyAdapter } from './adapters/misskey';
+import { FeishuAdapter } from './adapters/feishu';
 import { FrameworkConfig } from './core/types';
 import yaml from 'yaml';
 import fs from 'fs';
@@ -74,6 +75,12 @@ export async function createEngineFromConfig(configPath: string): Promise<ChatBo
         engine.registerAdapter(new MisskeyAdapter({
           instanceUrl: adapterConfig.config.instanceUrl,
           token: adapterConfig.config.token,
+        }));
+        break;
+      case 'feishu':
+        engine.registerAdapter(new FeishuAdapter({
+          appId: adapterConfig.config.appId,
+          appSecret: adapterConfig.config.appSecret,
         }));
         break;
       case 'web':
