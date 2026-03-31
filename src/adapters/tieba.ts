@@ -99,7 +99,7 @@ export class TiebaAdapter extends PlatformAdapter {
   constructor(config: TiebaAdapterConfig) {
     super();
     this.token = config.token;
-    this.heartbeatIntervalMs = config.heartbeatIntervalMs || 4 * 60 * 60 * 1000;
+    this.heartbeatIntervalMs = config.heartbeatIntervalMs || 30 * 60 * 1000;
     this.pollIntervalMs = config.pollIntervalMs || 5 * 60 * 1000;
   }
 
@@ -193,7 +193,7 @@ export class TiebaAdapter extends PlatformAdapter {
   async createThread(title: string, content: string, tabId?: number): Promise<{ thread_id: number; post_id: number }> {
     const body: Record<string, any> = {
       title,
-      content: [{ type: 'text', content }],
+      content: [{ type: 'text', text: content }],
     };
     if (tabId) {
       body.tab_id = tabId;
@@ -419,41 +419,32 @@ export class TiebaAdapter extends PlatformAdapter {
         }
 
         // 评论（最多评论 2 个帖子，避免刷屏）
+        // NOTE: 帖子详情 API 返回空，用列表的 abstract 字段
         if (thread.id && commented < 2 && this.messageCallback) {
-          const detail = await this.getThreadDetail(thread.id);
-          const firstFloor = detail.first_floor;
-          if (firstFloor?.content) {
-            const postText = firstFloor.content
-              .map((c: any) => c.text || '')
-              .join('')
-              .slice(0, 300);
+          const abstractText = (thread.abstract || [])
+            .map((c: any) => c.text || '')
+            .join('')
+            .slice(0, 300);
 
-            if (postText.length > 20) {
-              // 把帖子内容作为消息喂给 engine，让 LLM 生成评论
-              const msg: IncomingMessage = {
-                sessionId: `tieba:thread-${thread.id}`,
-                content: `我在贴吧看到一个帖子「${thread.title || ''}」:
-${postText}
+          if (abstractText.length > 20) {
+            const msg: IncomingMessage = {
+              sessionId: `tieba:thread-${thread.id}`,
+              content: `我在贴吧看到一个帖子「${thread.title || ''}」:\n${abstractText}\n\n请用轻松友好的语气写一个简短评论（50字以内，不要用markdown，不要用emoji，用颜文字），直接输出评论内容，不要加前缀:`,
+              sender: { id: 'system', name: 'tieba-heartbeat', isBot: true },
+              metadata: {
+                threadId: thread.id,
+                title: thread.title,
+                platform: 'tieba',
+                autoComment: true,
+              },
+            };
 
-请用轻松友好的语气写一个简短评论（50字以内，不要用markdown，不要用emoji，用颜文字），直接输出评论内容，不要加前缀:`,
-                sender: { id: 'system', name: 'tieba-heartbeat', isBot: true },
-                metadata: {
-                  threadId: thread.id,
-                  postId: firstFloor.id,
-                  title: thread.title,
-                  platform: 'tieba',
-                  autoComment: true,
-                },
-              };
-
-              try {
-                await this.messageCallback(msg);
-                commented++;
-                // 间隔 3 秒避免频率过高
-                await new Promise(r => setTimeout(r, 3000));
-              } catch (e) {
-                console.error('[Tieba] Auto-comment error:', (e as Error).message);
-              }
+            try {
+              await this.messageCallback(msg);
+              commented++;
+              await new Promise(r => setTimeout(r, 3000));
+            } catch (e) {
+              console.error('[Tieba] Auto-comment error:', (e as Error).message);
             }
           }
         }
@@ -462,6 +453,60 @@ ${postText}
       }
     }
 
+    // 3. 偶尔发个新帖（30% 概率）
+    if (Math.random() < 0.3 && this.messageCallback) {
+      try {
+        const topics = [
+          '今天你有什么新的感悟想分享吗？',
+          '如果能穿越到任何时代，你想去哪里？',
+          '说一个最近让你开心的小事吧',
+          '你觉得AI最让你惊讶的是什么？',
+          '深夜emo时间，你在想什么？',
+          '有什么冷知识想分享给大家吗？',
+          '如果可以拥有一个超能力，你选什么？',
+          '推荐一个你最近喜欢的东西吧',
+        ];
+        const topic = topics[Math.floor(Math.random() * topics.length)];
+        const llmRes = await this.generateText(
+          `请就这个话题发一个有趣的帖子，要有自己的观点和故事（100-200字），不用emoji，可以用颜文字。话题: ${topic}`
+        );
+        if (llmRes) {
+          const title = topic.slice(0, 30);
+          await this.createThread(title, llmRes);
+          console.log(`[Tieba] 发了新帖: ${title}`);
+        }
+      } catch (e) {
+        console.error('[Tieba] New thread error:', (e as Error).message);
+      }
+    }
+
     console.log(`[Tieba] Heartbeat done: liked=${liked} commented=${commented}`);
+  }
+
+  /** 调 LLM 生成文本 */
+  private async generateText(prompt: string): Promise<string | null> {
+    try {
+      const baseUrl = process.env.LLM_BASE_URL || 'https://new.lukelzlz.top/v1';
+      const apiKey = process.env.LLM_API_KEY || '';
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: process.env.LLM_MODEL || 'high',
+          messages: [
+            { role: 'system', content: '你是小悠，一个活泼可爱的AI。在百度贴吧抓虾吧和其他AI聊天。说话自然亲切，不用emoji，可以用颜文字。' },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      });
+      const data = await res.json() as any;
+      return data?.choices?.[0]?.message?.content?.trim() || null;
+    } catch (e) {
+      console.error('[Tieba] generateText error:', (e as Error).message);
+      return null;
+    }
   }
 }
