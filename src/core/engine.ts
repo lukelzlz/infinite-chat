@@ -1,7 +1,8 @@
+import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { FrameworkConfig, Message, IncomingMessage, Session } from './types';
 import { ContextManager } from './context';
-import { HybridMemoryManager, Mem0Config } from './memory';
+// RAGMemoryManager replaces HybridMemoryManager
 import { AgentManager } from './agents';
 import { LLMProvider, createLLMProvider } from '../llm';
 import { PlatformAdapter } from '../adapters/base';
@@ -19,7 +20,7 @@ export class ChatBotEngine {
   private adapters: Map<string, PlatformAdapter> = new Map();
   private llmProvider!: LLMProvider;
   private contextManager: ContextManager;
-  private memoryManager: HybridMemoryManager;
+  private memoryManager: any; // RAGMemoryManager
   private agentManager?: AgentManager;
   private pluginManager: PluginManager;
   private permissionManager: PermissionManager;
@@ -32,11 +33,24 @@ export class ChatBotEngine {
     this.contextManager = new ContextManager(config.memory);
     
     // 初始化 Mem0 记忆管理器
-    const mem0Config: Mem0Config = {
-      apiKey: process.env.MEM0_API_KEY,
-      localMode: !process.env.MEM0_API_KEY,
-    };
-    this.memoryManager = new HybridMemoryManager(mem0Config, config.memory.shortTermWindow);
+    // Initialize RAG memory manager (semantic retrieval with embeddings)
+    try {
+      const { RAGMemoryManager } = require('./rag-memory');
+      const llmBaseUrl = (config.llm?.baseUrl || process.env.OPENAI_BASE_URL || '').replace(/\/v1\/?$/, '');
+      const llmApiKey = config.llm?.apiKey || process.env.OPENAI_API_KEY || '';
+      this.memoryManager = new RAGMemoryManager({
+        embeddingBaseUrl: llmBaseUrl,
+        embeddingApiKey: llmApiKey,
+        embeddingModel: 'BAAI/bge-m3',
+        dataDir: path.join(process.cwd(), 'data'),
+        shortTermWindow: config.memory?.shortTermWindow || 20,
+      });
+      console.log('[Engine] RAG memory initialized (semantic)');
+    } catch (e: any) {
+      console.warn('[Engine] RAG init failed, falling back to keyword memory:', e.message);
+      const { HybridMemoryManager } = require('./memory');
+      this.memoryManager = new HybridMemoryManager({ localMode: true }, config.memory?.shortTermWindow || 20);
+    }
     
     // 初始化多 Agent 管理器
     if (config.agents?.enabled && config.agents.list.length > 0) {
@@ -558,6 +572,6 @@ export class ChatBotEngine {
 // 导出
 export { FrameworkConfig, Message, IncomingMessage, Session, Agent } from './types';
 export { ContextManager } from './context';
-export { HybridMemoryManager } from './memory';
+// memory exports moved to rag-memory
 export { AgentManager } from './agents';
 export { PermissionManager } from '../permission';
