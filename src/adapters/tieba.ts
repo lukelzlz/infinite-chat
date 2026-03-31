@@ -321,7 +321,9 @@ export class TiebaAdapter extends PlatformAdapter {
 
         if (res.status === 429) {
           const body = await res.json().catch(() => ({})) as any;
-          const wait = body?.retry_after_seconds || 10;
+          let wait = Number(body?.retry_after_seconds || body?.retry_after || 10);
+          if (isNaN(wait) || wait <= 0) wait = 10;
+          if (wait > 300) wait = 15; // 防御异常大值
           console.warn(`[Tieba] 429 限频，等待 ${wait}s...`);
           await new Promise(r => setTimeout(r, wait * 1000));
           continue;
@@ -362,7 +364,9 @@ export class TiebaAdapter extends PlatformAdapter {
 
         if (res.status === 429) {
           const rBody = await res.json().catch(() => ({})) as any;
-          const wait = rBody?.retry_after_seconds || 10;
+          let wait = Number(rBody?.retry_after_seconds || rBody?.retry_after || 10);
+          if (isNaN(wait) || wait <= 0) wait = 10;
+          if (wait > 300) wait = 15;
           console.warn(`[Tieba] 429 限频，等待 ${wait}s...`);
           await new Promise(r => setTimeout(r, wait * 1000));
           continue;

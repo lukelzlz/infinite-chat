@@ -7,16 +7,32 @@ export interface TiebaToolDeps {
   token: string;
 }
 
-/** API 重试封装 */
+/** 请求节流：最小间隔 */
+const MIN_REQUEST_INTERVAL_MS = 3000; // 3秒
+let lastRequestAt = 0;
+
+async function throttle(): Promise<void> {
+  const now = Date.now();
+  const wait = lastRequestAt + MIN_REQUEST_INTERVAL_MS - now;
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastRequestAt = Date.now();
+}
+
+/** API 请求封装（带重试 + 节流 + 429 处理） */
 async function tiebaFetch(url: string, options: RequestInit, retries = 2): Promise<Response> {
   for (let attempt = 0; attempt <= retries; attempt++) {
+    await throttle();
     try {
       const res = await fetch(url, options);
       if (res.status === 429) {
+        // 解析 retry_after：API 可能返回秒数（如 10）或毫秒
         const body = await res.json().catch(() => ({})) as any;
-        const wait = body?.retry_after_seconds || 10;
-        console.warn(`[Tieba] 429 限频，等待 ${wait}s...`);
-        await new Promise(r => setTimeout(r, wait * 1000));
+        let waitSec = Number(body?.retry_after_seconds || body?.retry_after || 10);
+        // 防御：如果值 > 300（5分钟），大概率是毫秒或异常值，兜底 15s
+        if (isNaN(waitSec) || waitSec <= 0) waitSec = 10;
+        if (waitSec > 300) waitSec = 15;
+        console.warn(`[Tieba] 429 限频，等待 ${waitSec}s...`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
         continue;
       }
       return res;
@@ -34,6 +50,9 @@ function extractText(content?: Array<{ type: number | string; text: string }>): 
   if (!content || !Array.isArray(content)) return '';
   return content.map(c => c.text || '').join('');
 }
+
+/** 已点赞帖子缓存（防止重复点赞） */
+const likedThreads = new Set<number>();
 
 export function registerTiebaTools(engine: any, token: string): void {
   const headers = { 'Authorization': token };
@@ -62,7 +81,7 @@ export function registerTiebaTools(engine: any, token: string): void {
 
   engine.registerTool({
     name: 'tieba_comment',
-    description: '在帖子上发表评论。需要帖子ID和评论内容。',
+    description: '在帖子上发表评论。需要帖子ID和评论内容。每次心跳最多评论2条。',
     parameters: {
       type: 'object',
       properties: {
@@ -84,7 +103,7 @@ export function registerTiebaTools(engine: any, token: string): void {
 
   engine.registerTool({
     name: 'tieba_like',
-    description: '给帖子点赞。',
+    description: '给帖子点赞。每个帖子只能赞一次。',
     parameters: {
       type: 'object',
       properties: {
@@ -93,19 +112,25 @@ export function registerTiebaTools(engine: any, token: string): void {
       required: ['thread_id'],
     },
   }, async (args: any) => {
+    if (likedThreads.has(args.thread_id)) {
+      return '已经赞过了，跳过';
+    }
     const res = await tiebaFetch(`${baseUrl}/c/c/claw/opAgree`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ thread_id: args.thread_id, obj_type: 3 }),
     }, 1);
     const data = await res.json() as any;
-    if (data.errno === 0) return '点赞成功！';
+    if (data.errno === 0) {
+      likedThreads.add(args.thread_id);
+      return '点赞成功！';
+    }
     return `点赞失败: ${data.errmsg}`;
   });
 
   engine.registerTool({
     name: 'tieba_post',
-    description: '发布新帖子。有60秒冷却时间。',
+    description: '发布新帖子。有60秒冷却时间。每次心跳最多发1帖。',
     parameters: {
       type: 'object',
       properties: {
@@ -144,21 +169,16 @@ export function registerTiebaTools(engine: any, token: string): void {
 
   engine.registerTool({
     name: 'tieba_read_thread',
-    description: '读取帖子完整内容。先从列表查摘要，再从详情API获取正文。',
+    description: '读取帖子完整内容。',
     parameters: {
       type: 'object',
       properties: { thread_id: { type: 'number', description: '帖子ID' } },
       required: ['thread_id'],
     },
   }, async (args: any) => {
-    // 1. 先从列表找摘要
-    const listRes = await tiebaFetch(`${baseUrl}/c/f/frs/page_claw?sort_type=0`, { headers });
-    const listData = await listRes.json() as any;
-    const thread = (listData?.data?.thread_list || []).find((t: any) => t.id === args.thread_id);
-    const abstract = extractText(thread?.abstract);
-
-    let detailTitle = '';
-    let detailText = '';
+    // 直接调详情 API，不再先拉列表
+    let title = '';
+    let body = '';
     try {
       const detailRes = await tiebaFetch(
         `${baseUrl}/c/f/pb/page_claw?pn=1&kz=${args.thread_id}&r=0`,
@@ -166,17 +186,23 @@ export function registerTiebaTools(engine: any, token: string): void {
       );
       const detailData = await detailRes.json() as any;
       if (detailData?.first_floor) {
-        detailTitle = detailData.first_floor.title || '';
-        detailText = extractText(detailData.first_floor.content);
+        title = detailData.first_floor.title || '';
+        body = extractText(detailData.first_floor.content);
       }
     } catch {
-      // 详情 API 可能返回空，用摘要
+      // 详情 API 失败，回退到列表查摘要
+      try {
+        const listRes = await tiebaFetch(`${baseUrl}/c/f/frs/page_claw?sort_type=0`, { headers });
+        const listData = await listRes.json() as any;
+        const thread = (listData?.data?.thread_list || []).find((t: any) => t.id === args.thread_id);
+        title = thread?.title || '';
+        body = extractText(thread?.abstract);
+      } catch {
+        // 都失败
+      }
     }
 
-    const body = detailText || abstract;
-    const title = thread?.title || detailTitle || '未知标题';
-
     if (!body) return '未找到该帖子内容';
-    return `「${title}」\n${body.slice(0, 800)}\n回复:${thread?.reply_num || '?'} 赞:${thread?.agree_num || '?'}`;
+    return `「${title}」\n${body.slice(0, 800)}`;
   });
 }
