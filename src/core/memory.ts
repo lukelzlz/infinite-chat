@@ -100,6 +100,7 @@ export class Mem0Manager {
 
   private async initClient(): Promise<void> {
     try {
+      // @ts-ignore - mem0ai is optional
       const mem0Module = await import('mem0ai').catch(() => null);
       if (mem0Module && mem0Module.Mem0) {
         this.client = new mem0Module.Mem0({

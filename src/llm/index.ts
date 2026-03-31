@@ -13,10 +13,11 @@ export { CustomModelProvider, createCustomModelProvider, getPresetModelConfig, P
  */
 export class OpenAIProvider extends LLMProvider {
   private client: any = null;
+  private initPromise: Promise<void> | null = null;
 
   constructor(config: LLMConfig) {
     super(config);
-    this.initClient();
+    this.initPromise = this.initClient();
   }
 
   private async initClient(): Promise<void> {
@@ -31,6 +32,12 @@ export class OpenAIProvider extends LLMProvider {
     }
   }
 
+  private async ensureClient(): Promise<void> {
+    if (this.client) return;
+    if (this.initPromise) await this.initPromise;
+    if (!this.client) throw new Error('OpenAI client not initialized');
+  }
+
   async chat(
     messages: Message[],
     options?: {
@@ -40,9 +47,7 @@ export class OpenAIProvider extends LLMProvider {
       tools?: ToolDefinition[];
     }
   ): Promise<LLMChatResult> {
-    if (!this.client) {
-      throw new Error('OpenAI client not initialized');
-    }
+    await this.ensureClient();
 
     const formattedMessages: any[] = [];
     
@@ -109,9 +114,7 @@ export class OpenAIProvider extends LLMProvider {
       temperature?: number;
     }
   ): Promise<string> {
-    if (!this.client) {
-      throw new Error('OpenAI client not initialized');
-    }
+    await this.ensureClient();
 
     const formattedMessages: any[] = [];
     

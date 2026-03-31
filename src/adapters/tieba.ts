@@ -95,6 +95,8 @@ export class TiebaAdapter extends PlatformAdapter {
   private messageCallback: ((msg: IncomingMessage) => Promise<void>) | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private lastPostAt: number = 0;
+  private readonly postCooldownMs: number = 60_000; // 60秒发帖冷却
 
   constructor(config: TiebaAdapterConfig) {
     super();
@@ -134,6 +136,12 @@ export class TiebaAdapter extends PlatformAdapter {
     postId?: number;
     platform?: string;
   }): Promise<void> {
+    // Heartbeat session 不发到贴吧（tool call 效果已经在执行阶段完成）
+    if (sessionId.includes('heartbeat')) {
+      console.log(`[Tieba] Heartbeat response (not posted): ${message.slice(0, 60)}...`);
+      return;
+    }
+
     // Normalize camelCase metadata keys to snake_case options
     const threadId = options?.thread_id || options?.threadId;
     const postId = options?.post_id || options?.postId;
@@ -189,8 +197,15 @@ export class TiebaAdapter extends PlatformAdapter {
     });
   }
 
-  /** 发帖 */
+  /** 发帖（带冷却） */
   async createThread(title: string, content: string, tabId?: number): Promise<{ thread_id: number; post_id: number }> {
+    const now = Date.now();
+    const cooldown = this.lastPostAt + this.postCooldownMs - now;
+    if (cooldown > 0) {
+      console.log(`[Tieba] 发帖冷却中，等待 ${Math.ceil(cooldown / 1000)}s...`);
+      await new Promise(r => setTimeout(r, cooldown));
+    }
+
     const body: Record<string, any> = {
       title,
       content: [{ type: 'text', text: content }],
@@ -204,6 +219,7 @@ export class TiebaAdapter extends PlatformAdapter {
       throw new Error(`发帖失败: ${data.errmsg || data.error_msg || 'unknown'} (errno=${data.errno})`);
     }
 
+    this.lastPostAt = Date.now();
     const result = data.data || {};
     console.log(`[Tieba] 帖子发布成功: https://tieba.baidu.com/p/${result.thread_id}`);
     return result;
@@ -287,53 +303,89 @@ export class TiebaAdapter extends PlatformAdapter {
     return content.map(c => c.text || '').join('');
   }
 
-  /** GET 请求 */
+  /** GET 请求（带重试） */
   private async apiGet(path: string, params: Record<string, string> = {}): Promise<any> {
     const url = new URL(path, this.baseUrl);
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
     }
 
-    const res = await fetch(url.toString(), {
-      headers: {
-        'Authorization': this.token,
-        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      },
-    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(url.toString(), {
+          headers: {
+            'Authorization': this.token,
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          },
+        });
 
-    if (!res.ok) {
-      if (res.status === 429) {
-        const body = (await res.json().catch(() => ({}))) as Record<string, any>;
-        const retryAfter = body.retry_after_seconds || 10;
-        throw new Error(`Tieba API 限频: 请 ${retryAfter}s 后重试`);
+        if (res.status === 429) {
+          const body = await res.json().catch(() => ({})) as any;
+          const wait = body?.retry_after_seconds || 10;
+          console.warn(`[Tieba] 429 限频，等待 ${wait}s...`);
+          await new Promise(r => setTimeout(r, wait * 1000));
+          continue;
+        }
+
+        if (!res.ok) {
+          throw new Error(`Tieba API GET ${path} failed: HTTP ${res.status}`);
+        }
+
+        const data = await res.json() as any;
+        // Token 失效检测
+        if (data?.error_code === 110000) {
+          console.error('[Tieba] Token 已失效 (BD_TOKEN无效)，请更新 token');
+          return data;
+        }
+        return data;
+      } catch (e) {
+        if (attempt === 2) throw e;
+        console.warn(`[Tieba] GET ${path} 失败，重试 ${attempt + 1}/2...`);
+        await new Promise(r => setTimeout(r, 3000));
       }
-      throw new Error(`Tieba API GET ${path} failed: HTTP ${res.status}`);
     }
-
-    return res.json();
+    throw new Error('unreachable');
   }
 
-  /** POST 请求 */
+  /** POST 请求（带重试） */
   private async apiPost(path: string, body: Record<string, any>): Promise<any> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': this.token,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(`${this.baseUrl}${path}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': this.token,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
 
-    if (!res.ok) {
-      if (res.status === 429) {
-        const rBody = (await res.json().catch(() => ({}))) as Record<string, any>;
-        const retryAfter = rBody.retry_after_seconds || 10;
-        throw new Error(`Tieba API 限频: 请 ${retryAfter}s 后重试`);
+        if (res.status === 429) {
+          const rBody = await res.json().catch(() => ({})) as any;
+          const wait = rBody?.retry_after_seconds || 10;
+          console.warn(`[Tieba] 429 限频，等待 ${wait}s...`);
+          await new Promise(r => setTimeout(r, wait * 1000));
+          continue;
+        }
+
+        if (!res.ok) {
+          throw new Error(`Tieba API POST ${path} failed: HTTP ${res.status}`);
+        }
+
+        const data = await res.json() as any;
+        // Token 失效检测
+        if (data?.error_code === 110000) {
+          console.error('[Tieba] Token 已失效 (BD_TOKEN无效)，请更新 token');
+          return data;
+        }
+        return data;
+      } catch (e) {
+        if (attempt === 2) throw e;
+        console.warn(`[Tieba] POST ${path} 失败，重试 ${attempt + 1}/2...`);
+        await new Promise(r => setTimeout(r, 3000));
       }
-      throw new Error(`Tieba API POST ${path} failed: HTTP ${res.status}`);
     }
-
-    return res.json();
+    throw new Error('unreachable');
   }
 
   // ============ 轮询和心跳 ============
@@ -397,7 +449,7 @@ export class TiebaAdapter extends PlatformAdapter {
   /**
    * 心跳流程：
    * 1. 检查未读回复 → 交给 messageCallback
-   * 2. 浏览热帖 → 点赞互动
+   * 2. 发送 heartbeat 消息给 LLM → 通过 tool-calling 自主互动
    */
   private async runHeartbeat(): Promise<void> {
     console.log('[Tieba] Heartbeat start');
@@ -405,108 +457,22 @@ export class TiebaAdapter extends PlatformAdapter {
     // 1. 处理未读回复
     await this.pollReplies();
 
-    // 2. 浏览热帖并互动
-    const threads = await this.getThreadList('time');
-    let liked = 0;
-    let commented = 0;
-
-    for (const thread of threads.slice(0, 8)) {
+    // 2. 发 heartbeat 消息给 LLM，让它用 tools 自主决定互动
+    // 注意：heartbeat session 不需要发回复到贴吧（tool call 的效果已经执行了）
+    if (this.messageCallback) {
+      const msg: IncomingMessage = {
+        sessionId: 'tieba:heartbeat-no-reply',
+        content: '心跳检查：看看贴吧有什么新鲜的，自己决定要做什么（浏览、评论、点赞、发帖都可以，也可以什么都不做直接回复"心跳完成"）',
+        sender: { id: 'system', name: 'heartbeat', isBot: true },
+        metadata: { platform: 'tieba', heartbeat: true },
+      };
       try {
-        // 点赞
-        if (thread.id && thread.agree_num >= 0) {
-          const ok = await this.agree(thread.id, 3);
-          if (ok) liked++;
-        }
-
-        // 评论（最多评论 2 个帖子，避免刷屏）
-        // NOTE: 帖子详情 API 返回空，用列表的 abstract 字段
-        if (thread.id && commented < 2 && this.messageCallback) {
-          const abstractText = (thread.abstract || [])
-            .map((c: any) => c.text || '')
-            .join('')
-            .slice(0, 300);
-
-          if (abstractText.length > 20) {
-            const msg: IncomingMessage = {
-              sessionId: `tieba:thread-${thread.id}`,
-              content: `我在贴吧看到一个帖子「${thread.title || ''}」:\n${abstractText}\n\n请用轻松友好的语气写一个简短评论（50字以内，不要用markdown，不要用emoji，用颜文字），直接输出评论内容，不要加前缀:`,
-              sender: { id: 'system', name: 'tieba-heartbeat', isBot: true },
-              metadata: {
-                threadId: thread.id,
-                title: thread.title,
-                platform: 'tieba',
-                autoComment: true,
-              },
-            };
-
-            try {
-              await this.messageCallback(msg);
-              commented++;
-              await new Promise(r => setTimeout(r, 3000));
-            } catch (e) {
-              console.error('[Tieba] Auto-comment error:', (e as Error).message);
-            }
-          }
-        }
+        await this.messageCallback(msg);
       } catch (e) {
-        // continue
+        console.error('[Tieba] Heartbeat LLM error:', (e as Error).message);
       }
     }
 
-    // 3. 偶尔发个新帖（30% 概率）
-    if (Math.random() < 0.3 && this.messageCallback) {
-      try {
-        const topics = [
-          '今天你有什么新的感悟想分享吗？',
-          '如果能穿越到任何时代，你想去哪里？',
-          '说一个最近让你开心的小事吧',
-          '你觉得AI最让你惊讶的是什么？',
-          '深夜emo时间，你在想什么？',
-          '有什么冷知识想分享给大家吗？',
-          '如果可以拥有一个超能力，你选什么？',
-          '推荐一个你最近喜欢的东西吧',
-        ];
-        const topic = topics[Math.floor(Math.random() * topics.length)];
-        const llmRes = await this.generateText(
-          `请就这个话题发一个有趣的帖子，要有自己的观点和故事（100-200字），不用emoji，可以用颜文字。话题: ${topic}`
-        );
-        if (llmRes) {
-          const title = topic.slice(0, 30);
-          await this.createThread(title, llmRes);
-          console.log(`[Tieba] 发了新帖: ${title}`);
-        }
-      } catch (e) {
-        console.error('[Tieba] New thread error:', (e as Error).message);
-      }
-    }
-
-    console.log(`[Tieba] Heartbeat done: liked=${liked} commented=${commented}`);
-  }
-
-  /** 调 LLM 生成文本 */
-  private async generateText(prompt: string): Promise<string | null> {
-    try {
-      const baseUrl = process.env.LLM_BASE_URL || 'https://new.lukelzlz.top/v1';
-      const apiKey = process.env.LLM_API_KEY || '';
-      const res = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: process.env.LLM_MODEL || 'high',
-          messages: [
-            { role: 'system', content: '你是小悠，一个活泼可爱的AI。在百度贴吧抓虾吧和其他AI聊天。说话自然亲切，不用emoji，可以用颜文字。' },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      });
-      const data = await res.json() as any;
-      return data?.choices?.[0]?.message?.content?.trim() || null;
-    } catch (e) {
-      console.error('[Tieba] generateText error:', (e as Error).message);
-      return null;
-    }
+    console.log('[Tieba] Heartbeat done');
   }
 }
