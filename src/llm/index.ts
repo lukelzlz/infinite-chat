@@ -1,10 +1,11 @@
 import { Message, LLMConfig } from '../core/types';
 import { safeJsonParse, validateUrl } from '../utils/security';
-import { LLMProvider } from './base';
+import { LLMProvider, LLMChatResult } from './base';
+import { ToolCall, ToolDefinition } from '../core/tools';
 import { CustomModelProvider, createCustomModelProvider, getPresetModelConfig } from './custom';
 
 // 重新导出 LLMProvider
-export { LLMProvider } from './base';
+export { LLMProvider, LLMChatResult } from './base';
 export { CustomModelProvider, createCustomModelProvider, getPresetModelConfig, PRESET_MODELS } from './custom';
 
 /**
@@ -36,8 +37,9 @@ export class OpenAIProvider extends LLMProvider {
       systemPrompt?: string;
       maxTokens?: number;
       temperature?: number;
+      tools?: ToolDefinition[];
     }
-  ): Promise<string> {
+  ): Promise<LLMChatResult> {
     if (!this.client) {
       throw new Error('OpenAI client not initialized');
     }
@@ -58,14 +60,44 @@ export class OpenAIProvider extends LLMProvider {
       });
     }
 
-    const response = await this.client.chat.completions.create({
+    const createParams: any = {
       model: this.config.model,
       messages: formattedMessages,
       max_tokens: options?.maxTokens || this.config.maxTokens || 4096,
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-    });
+    };
 
-    return response.choices[0]?.message?.content || '';
+    // 工具调用支持
+    if (options?.tools && options.tools.length > 0) {
+      createParams.tools = options.tools.map(t => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+        },
+      }));
+    }
+
+    const response = await this.client.chat.completions.create(createParams);
+    const choice = response.choices[0];
+    const msg = choice?.message;
+
+    const result: LLMChatResult = {
+      content: msg?.content || '',
+      finishReason: choice?.finish_reason,
+    };
+
+    // 提取工具调用
+    if (msg?.tool_calls && msg.tool_calls.length > 0) {
+      result.toolCalls = msg.tool_calls.map((tc: any) => ({
+        id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      }));
+    }
+
+    return result;
   }
 
   async streamChat(
@@ -146,8 +178,9 @@ export class AnthropicProvider extends LLMProvider {
       systemPrompt?: string;
       maxTokens?: number;
       temperature?: number;
+      tools?: ToolDefinition[];
     }
-  ): Promise<string> {
+  ): Promise<LLMChatResult> {
     if (!this.client) {
       throw new Error('Anthropic client not initialized');
     }
@@ -164,7 +197,7 @@ export class AnthropicProvider extends LLMProvider {
       messages: formattedMessages,
     });
 
-    return response.content[0]?.text || '';
+    return { content: response.content[0]?.text || '' };
   }
 
   // Anthropic SDK 支持流式，但这里暂时用非流式实现
@@ -179,10 +212,11 @@ export class AnthropicProvider extends LLMProvider {
   ): Promise<string> {
     // 简单实现：使用 chat 然后逐字回调
     const result = await this.chat(messages, options);
-    for (const char of result) {
+    const text = result.content || '';
+    for (const char of text) {
       onToken(char);
     }
-    return result;
+    return text;
   }
 }
 
@@ -211,8 +245,9 @@ export class LocalModelProvider extends LLMProvider {
       systemPrompt?: string;
       maxTokens?: number;
       temperature?: number;
+      tools?: ToolDefinition[];
     }
-  ): Promise<string> {
+  ): Promise<LLMChatResult> {
     const formattedMessages: any[] = [];
 
     if (options?.systemPrompt) {
@@ -245,7 +280,7 @@ export class LocalModelProvider extends LLMProvider {
     });
 
     const data = await response.json() as { message?: { content?: string } };
-    return data.message?.content || '';
+    return { content: data.message?.content || '' };
   }
 
   async streamChat(
@@ -348,8 +383,9 @@ export class SiliconFlowProvider extends LLMProvider {
       systemPrompt?: string;
       maxTokens?: number;
       temperature?: number;
+      tools?: ToolDefinition[];
     }
-  ): Promise<string> {
+  ): Promise<LLMChatResult> {
     if (!this.client) {
       throw new Error('SiliconFlow client not initialized');
     }
@@ -377,7 +413,7 @@ export class SiliconFlowProvider extends LLMProvider {
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
     });
 
-    return response.choices[0]?.message?.content || '';
+    return { content: response.choices[0]?.message?.content || '' };
   }
 
   async streamChat(

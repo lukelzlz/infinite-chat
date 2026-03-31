@@ -164,7 +164,8 @@ ${context}
 
     if (results.length === 0) {
       // 没有相关内容，直接对话
-      return llm.chat(messages, { systemPrompt: options?.systemPrompt });
+      const r1 = await llm.chat(messages, { systemPrompt: options?.systemPrompt });
+    return r1.content || '';
     }
 
     // 构建带上下文的消息
@@ -182,7 +183,8 @@ ${context}
 参考资料：
 ${context}`;
 
-    return llm.chat(enhancedMessages, { systemPrompt });
+    const r2 = await llm.chat(enhancedMessages, { systemPrompt });
+    return r2.content || '';
   }
 }
 

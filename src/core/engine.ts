@@ -4,7 +4,8 @@ import { FrameworkConfig, Message, IncomingMessage, Session } from './types';
 import { ContextManager } from './context';
 // RAGMemoryManager replaces HybridMemoryManager
 import { AgentManager } from './agents';
-import { LLMProvider, createLLMProvider } from '../llm';
+import { LLMProvider, createLLMProvider, LLMChatResult } from '../llm';
+import { RegisteredTool, ToolCall, ToolDefinition, ToolResult } from './tools';
 import { PlatformAdapter } from '../adapters/base';
 import { Plugin, PluginManager } from '../plugins';
 import { PermissionManager, getPermissionManager } from '../permission';
@@ -26,6 +27,7 @@ export class ChatBotEngine {
   private permissionManager: PermissionManager;
   private sessions: Map<string, Session> = new Map();
   private isRunning = false;
+  private tools: Map<string, RegisteredTool> = new Map();
   private memManager: MemoryManager;
 
   constructor(config: FrameworkConfig) {
@@ -272,12 +274,50 @@ export class ChatBotEngine {
         console.log(`[Engine] RAG: Found ${ragResults.length} relevant documents`);
       }
 
-      // 调用 LLM
-      const response = await llmProvider.chat(messages, {
-        systemPrompt,
-        temperature: this.config.llm.temperature,
-        maxTokens: this.config.llm.maxTokens,
-      });
+      // 工具调用循环
+      const toolDefs = this.getToolDefinitions();
+      let llmResult: LLMChatResult;
+      let maxToolRounds = 5; // 最多5轮工具调用
+      const toolMessages: any[] = []; // tool role messages
+
+      do {
+        llmResult = await llmProvider.chat(messages, {
+          systemPrompt,
+          temperature: this.config.llm.temperature,
+          maxTokens: this.config.llm.maxTokens,
+          tools: toolDefs.length > 0 ? toolDefs : undefined,
+        });
+
+        // 如果没有工具调用，退出循环
+        if (!llmResult.toolCalls || llmResult.toolCalls.length === 0) break;
+
+        // 执行工具调用
+        const toolResults = await this.executeToolCalls(llmResult.toolCalls);
+
+        // 把 assistant 的 tool_calls 和 tool results 加入 messages
+        // (用 any 绕过 Message 类型检查，因为 tool role 不在原始类型里)
+        (messages as any[]).push({
+          role: 'assistant',
+          content: llmResult.content || null,
+          tool_calls: llmResult.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: tc.arguments },
+          })),
+        });
+
+        for (const tr of toolResults) {
+          (messages as any[]).push({
+            role: 'tool',
+            tool_call_id: tr.toolCallId,
+            content: tr.result,
+          });
+        }
+
+        maxToolRounds--;
+      } while (maxToolRounds > 0);
+
+      const response = llmResult.content;
 
       // 添加助手消息到上下文
       await this.contextManager.addMessage(sessionId, {
@@ -289,7 +329,6 @@ export class ChatBotEngine {
 
       // 发送回复
       if (adapter) {
-        // 如果是群聊且启用了多 Agent，可能需要链式回复
         if (session.groupId && this.agentManager?.getGroupChatConfig().agentInteraction) {
           await this.sendMessageWithPossibleChain(
             adapter,
@@ -355,11 +394,12 @@ export class ChatBotEngine {
       const systemPrompt = this.agentManager.buildMultiAgentSystemPrompt(nextAgent, true);
 
       // 生成回复
-      const chainResponse = await llmProvider.chat(messages, {
+      const chainResult = await llmProvider.chat(messages, {
         systemPrompt,
         temperature: this.config.llm.temperature,
         maxTokens: this.config.llm.maxTokens,
       });
+      const chainResponse = chainResult.content;
 
       // 添加到上下文
       await this.contextManager.addMessage(sessionId, {
@@ -559,6 +599,41 @@ export class ChatBotEngine {
    */
   updateConfig(partial: Partial<FrameworkConfig>): void {
     this.config = { ...this.config, ...partial };
+  }
+
+  /** 注册工具 */
+  registerTool(definition: ToolDefinition, executor: (args: Record<string, any>) => Promise<string>): void {
+    this.tools.set(definition.name, { definition, executor });
+    console.log(`[Engine] Tool registered: ${definition.name}`);
+  }
+
+  /** 获取所有已注册的工具定义 */
+  getToolDefinitions(): ToolDefinition[] {
+    return Array.from(this.tools.values()).map(t => t.definition);
+  }
+
+  /** 执行工具调用 */
+  private async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolResult[]> {
+    const results: ToolResult[] = [];
+    for (const tc of toolCalls) {
+      const tool = this.tools.get(tc.name);
+      if (!tool) {
+        results.push({ toolCallId: tc.id, success: false, result: `Unknown tool: ${tc.name}` });
+        continue;
+      }
+      try {
+        let args: Record<string, any> = {};
+        try { args = JSON.parse(tc.arguments); } catch { args = {}; }
+        console.log(`[Engine] Tool call: ${tc.name}(${JSON.stringify(args).slice(0, 100)})`);
+        const result = await tool.executor(args);
+        console.log(`[Engine] Tool result: ${result.slice(0, 100)}`);
+        results.push({ toolCallId: tc.id, success: true, result });
+      } catch (e: any) {
+        console.error(`[Engine] Tool error: ${tc.name}`, e.message);
+        results.push({ toolCallId: tc.id, success: false, result: `Error: ${e.message}` });
+      }
+    }
+    return results;
   }
 
   /**

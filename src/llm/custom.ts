@@ -1,5 +1,6 @@
 import { Message, LLMConfig, CustomModelConfig } from '../core/types';
-import { LLMProvider } from './base';
+import { LLMProvider, LLMChatResult } from './base';
+import { ToolDefinition } from '../core/tools';
 import { validateUrl } from '../utils/security';
 
 // 动态导入 OpenAI
@@ -87,7 +88,7 @@ export class CustomModelProvider extends LLMProvider {
       maxTokens?: number;
       temperature?: number;
     }
-  ): Promise<string> {
+  ): Promise<LLMChatResult> {
     await this.ensureClient();
 
     const formattedMessages: any[] = [];
@@ -120,7 +121,7 @@ export class CustomModelProvider extends LLMProvider {
 
     const response = await this.client.chat.completions.create(requestOptions);
 
-    return response.choices[0]?.message?.content || '';
+    return { content: response.choices[0]?.message?.content || '' };
   }
 
   async streamChat(
