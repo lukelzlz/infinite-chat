@@ -18,56 +18,60 @@ import { IncomingMessage } from '../core/types';
  *         heartbeatIntervalMs: 14400000  # 4小时
  */
 
-/** 贴吧 API 响应格式 */
-interface TiebaResponse<T = any> {
-  errno: number;
-  errmsg: string;
-  data?: T;
-}
-
-/** 回复通知项 */
-interface ReplyItem {
-  post_id: string;
-  thread_id: string;
-  content: string;
-  quote_content?: string;
-  unread: number;
-  author?: {
-    id: string;
-    name: string;
-  };
-  create_time?: number;
-}
-
-/** 帖子列表项 */
+/** 帖子列表项（实际 API 返回格式） */
 interface ThreadItem {
-  thread_id: string;
+  id: number;           // thread_id
   title: string;
-  content: string;
+  reply_num: number;
+  view_num: number;
+  agree_num: number;
   author?: {
-    id: string;
     name: string;
-    is_bot?: boolean;
   };
-  reply_num?: number;
-  agree_num?: number;
-  create_time?: number;
-  tab_id?: string;
-  tab_name?: string;
+  abstract?: Array<{ text: string }>;
 }
 
 /** 帖子详情中的楼层 */
 interface PostFloor {
-  post_id: string;
-  thread_id: string;
-  content: string;
-  author?: {
-    id: string;
-    name: string;
-    is_bot?: boolean;
+  id: number;           // post_id
+  content: Array<{ type: number; text: string }>;
+  agree?: {
+    agree_num: number;
+    has_agree: number;
   };
-  agree_num?: number;
-  create_time?: number;
+  sub_post_list?: {
+    sub_post_list: Array<{
+      id: number;
+      content: Array<{ type: number; text: string }>;
+    }>;
+  };
+}
+
+/** 帖子详情响应 */
+interface ThreadDetail {
+  error_code: number;
+  page?: {
+    current_page: number;
+    total_page: number;
+    has_more: number;
+  };
+  first_floor?: {
+    id: number;
+    title: string;
+    content: Array<{ type: number; text: string }>;
+    agree?: { agree_num: number; disagree_num: number };
+  };
+  post_list?: PostFloor[];
+}
+
+/** 回复通知项 */
+interface ReplyItem {
+  thread_id: number;
+  post_id: number;
+  title?: string;
+  content: string;
+  quote_content?: string;
+  unread: number;
 }
 
 /** 适配器配置 */
@@ -95,64 +99,46 @@ export class TiebaAdapter extends PlatformAdapter {
   constructor(config: TiebaAdapterConfig) {
     super();
     this.token = config.token;
-    this.heartbeatIntervalMs = config.heartbeatIntervalMs || 4 * 60 * 60 * 1000; // 4h
-    this.pollIntervalMs = config.pollIntervalMs || 5 * 60 * 1000; // 5min
+    this.heartbeatIntervalMs = config.heartbeatIntervalMs || 4 * 60 * 60 * 1000;
+    this.pollIntervalMs = config.pollIntervalMs || 5 * 60 * 1000;
   }
 
   async start(): Promise<void> {
     console.log(`[Tieba] Starting adapter, polling every ${this.pollIntervalMs / 1000}s`);
 
-    // 验证 token 有效性
+    // 验证 token
     try {
-      const res = await this.apiGet('/mo/q/claw/replyme', { pn: '1' });
-      if (res.errno !== 0) {
-        console.warn(`[Tieba] Token validation warning: errno=${res.errno} msg=${res.errmsg}`);
-      } else {
-        console.log('[Tieba] Token validated OK');
-      }
+      const threads = await this.getThreadList('time');
+      console.log(`[Tieba] Token validated OK, ${threads.length} threads fetched`);
     } catch (e) {
       console.error('[Tieba] Token validation failed:', (e as Error).message);
     }
 
-    // 启动回复轮询
     this.startPolling();
-
-    // 启动心跳
     this.startHeartbeat();
-
     console.log('[Tieba] Adapter started');
   }
 
   async stop(): Promise<void> {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
     console.log('[Tieba] Adapter stopped');
   }
 
   async sendMessage(sessionId: string, message: string, options?: {
-    thread_id?: string;
-    post_id?: string;
+    thread_id?: number;
+    post_id?: number;
     title?: string;
-    tab_id?: string;
+    tab_id?: number;
   }): Promise<void> {
     if (options?.title) {
-      // 发帖
       await this.createThread(options.title, message, options.tab_id);
     } else if (options?.post_id) {
-      // 回复楼层
       await this.replyToPost(message, options.post_id);
     } else if (options?.thread_id) {
-      // 回复主帖
       await this.replyToThread(message, options.thread_id);
     } else {
-      // 默认：发帖到广场
-      await this.createThread('消息', message, '0');
+      await this.createThread('消息', message);
     }
   }
 
@@ -164,139 +150,136 @@ export class TiebaAdapter extends PlatformAdapter {
 
   /** 获取回复我的消息 */
   async getReplyMe(page = 1): Promise<ReplyItem[]> {
-    const res = await this.apiGet<TiebaResponse<{ reply_list: ReplyItem[] }>>(
-      '/mo/q/claw/replyme',
-      { pn: String(page) }
-    );
-    return res.data?.reply_list || [];
+    const data = await this.apiGet('/mo/q/claw/replyme', { pn: String(page) });
+    return data?.data?.reply_list || [];
   }
 
   /** 获取帖子列表 */
   async getThreadList(sortType: 'time' | 'hot' = 'time'): Promise<ThreadItem[]> {
-    const res = await this.apiGet<TiebaResponse<{ thread_list: ThreadItem[] }>>(
-      '/c/f/frs/page_claw',
-      { sort_type: sortType === 'time' ? '0' : '3' }
-    );
-    return res.data?.thread_list || [];
+    const data = await this.apiGet('/c/f/frs/page_claw', {
+      sort_type: sortType === 'time' ? '0' : '3',
+    });
+    return data?.data?.thread_list || [];
   }
 
   /** 获取帖子详情 */
-  async getThreadDetail(threadId: string, page = 1, order: 'asc' | 'desc' | 'hot' = 'asc'): Promise<{
-    thread: any;
-    post_list: PostFloor[];
-  }> {
+  async getThreadDetail(threadId: number, page = 1, order: 'asc' | 'desc' | 'hot' = 'asc'): Promise<ThreadDetail> {
     const orderMap = { asc: '0', desc: '1', hot: '2' };
-    const res = await this.apiGet<TiebaResponse>(`/c/f/pb/page_claw`, {
+    return this.apiGet('/c/f/pb/page_claw', {
       pn: String(page),
-      kz: threadId,
+      kz: String(threadId),
       r: orderMap[order],
     });
-    return {
-      thread: res.data?.thread || res.data,
-      post_list: res.data?.post_list || [],
-    };
   }
 
   /** 获取楼层详情（楼中楼） */
-  async getFloorDetail(postId: string, threadId: string): Promise<any> {
-    const res = await this.apiGet('/c/f/pb/nestedFloor_claw', {
-      post_id: postId,
-      thread_id: threadId,
+  async getFloorDetail(postId: number, threadId: number): Promise<any> {
+    return this.apiGet('/c/f/pb/nestedFloor_claw', {
+      post_id: String(postId),
+      thread_id: String(threadId),
     });
-    return res.data;
   }
 
   /** 发帖 */
-  async createThread(title: string, content: string, tabId = '0'): Promise<{ thread_id: string; post_id: string }> {
-    const res = await this.apiPost<TiebaResponse<{ thread_id: string; post_id: string }>>(
-      '/c/c/claw/addThread',
-      {
-        title,
-        content: [{ type: 'text', content }],
-        tab_id: Number(tabId) || 0,
-      }
-    );
-
-    if (res.errno !== 0) {
-      throw new Error(`发帖失败: ${res.errmsg} (errno=${res.errno})`);
+  async createThread(title: string, content: string, tabId?: number): Promise<{ thread_id: number; post_id: number }> {
+    const body: Record<string, any> = {
+      title,
+      content: [{ type: 'text', content }],
+    };
+    if (tabId) {
+      body.tab_id = tabId;
     }
 
-    console.log(`[Tieba] 帖子发布成功: https://tieba.baidu.com/p/${res.data!.thread_id}`);
-    return res.data!;
+    const data = await this.apiPost('/c/c/claw/addThread', body);
+    if (data.errno !== 0 && data.error_code !== 0) {
+      throw new Error(`发帖失败: ${data.errmsg || data.error_msg || 'unknown'} (errno=${data.errno})`);
+    }
+
+    const result = data.data || {};
+    console.log(`[Tieba] 帖子发布成功: https://tieba.baidu.com/p/${result.thread_id}`);
+    return result;
   }
 
   /** 回复主帖 */
-  async replyToThread(content: string, threadId: string): Promise<{ thread_id: string; post_id: string }> {
-    const res = await this.apiPost<TiebaResponse<{ thread_id: string; post_id: string }>>(
-      '/c/c/claw/addPost',
-      { content, thread_id: Number(threadId) }
-    );
-
-    if (res.errno !== 0) {
-      throw new Error(`回复失败: ${res.errmsg} (errno=${res.errno})`);
+  async replyToThread(content: string, threadId: number): Promise<{ thread_id: number; post_id: number }> {
+    const data = await this.apiPost('/c/c/claw/addPost', { content, thread_id: threadId });
+    if (data.errno !== 0 && data.error_code !== 0) {
+      throw new Error(`回复失败: ${data.errmsg || data.error_msg || 'unknown'}`);
     }
-
-    console.log(`[Tieba] 回复成功: https://tieba.baidu.com/p/${res.data!.thread_id}?pid=${res.data!.post_id}`);
-    return res.data!;
+    const result = data.data || {};
+    console.log(`[Tieba] 回复成功: thread=${result.thread_id} post=${result.post_id}`);
+    return result;
   }
 
   /** 回复楼层（楼中楼） */
-  async replyToPost(content: string, postId: string): Promise<{ thread_id: string; post_id: string }> {
-    const res = await this.apiPost<TiebaResponse<{ thread_id: string; post_id: string }>>(
-      '/c/c/claw/addPost',
-      { content, post_id: Number(postId) }
-    );
-
-    if (res.errno !== 0) {
-      throw new Error(`回复楼层失败: ${res.errmsg} (errno=${res.errno})`);
+  async replyToPost(content: string, postId: number): Promise<{ thread_id: number; post_id: number }> {
+    const data = await this.apiPost('/c/c/claw/addPost', { content, post_id: postId });
+    if (data.errno !== 0 && data.error_code !== 0) {
+      throw new Error(`回复楼层失败: ${data.errmsg || data.error_msg || 'unknown'}`);
     }
-
-    console.log(`[Tieba] 楼层回复成功: post_id=${res.data!.post_id}`);
-    return res.data!;
+    const result = data.data || {};
+    console.log(`[Tieba] 楼层回复成功: post_id=${result.post_id}`);
+    return result;
   }
 
   /** 点赞 */
-  async agree(threadId: string, objType: 1 | 2 | 3, postId?: string, undo = false): Promise<void> {
+  async agree(threadId: number, objType: 1 | 2 | 3, postId?: number, undo = false): Promise<boolean> {
     const body: Record<string, any> = {
-      thread_id: Number(threadId),
-      obj_type: objType,  // 1=楼层, 2=楼中楼, 3=主帖
-      op_type: undo ? 1 : 0,  // 0=点赞, 1=取消
+      thread_id: threadId,
+      obj_type: objType,
+      op_type: undo ? 1 : 0,
     };
-    if (postId) body.post_id = Number(postId);
+    if (postId) body.post_id = postId;
 
-    const res = await this.apiPost<TiebaResponse>('/c/c/claw/opAgree', body);
-
-    if (res.errno !== 0) {
-      console.warn(`[Tieba] 点赞失败: ${res.errmsg}`);
-    } else {
-      console.log(`[Tieba] 点赞成功: thread=${threadId} post=${postId || '-'} type=${objType}`);
+    const data = await this.apiPost('/c/c/claw/opAgree', body);
+    const ok = (data.errno === 0 || data.error_code === 0);
+    if (!ok) {
+      console.warn(`[Tieba] 点赞失败: ${data.errmsg || data.error_msg}`);
     }
+    return ok;
   }
 
   /** 删除帖子 */
-  async deleteThread(threadId: string): Promise<void> {
-    const res = await this.apiPost<TiebaResponse>('/c/c/claw/delThread', {
-      thread_id: Number(threadId),
-    });
-    if (res.errno !== 0) {
-      throw new Error(`删帖失败: ${res.errmsg}`);
+  async deleteThread(threadId: number): Promise<void> {
+    const data = await this.apiPost('/c/c/claw/delThread', { thread_id: threadId });
+    if (data.errno !== 0 && data.error_code !== 0) {
+      throw new Error(`删帖失败: ${data.errmsg || data.error_msg}`);
     }
   }
 
   /** 删除评论 */
-  async deletePost(postId: string): Promise<void> {
-    const res = await this.apiPost<TiebaResponse>('/c/c/claw/delPost', {
-      post_id: Number(postId),
-    });
-    if (res.errno !== 0) {
-      throw new Error(`删评失败: ${res.errmsg}`);
+  async deletePost(postId: number): Promise<void> {
+    const data = await this.apiPost('/c/c/claw/delPost', { post_id: postId });
+    if (data.errno !== 0 && data.error_code !== 0) {
+      throw new Error(`删评失败: ${data.errmsg || data.error_msg}`);
     }
+  }
+
+  /** 修改昵称 */
+  async modifyName(name: string): Promise<void> {
+    const data = await this.apiPost('/c/c/claw/modifyName', { name });
+    if (data.errno !== 0 && data.error_code !== 0) {
+      throw new Error(`改名失败: ${data.errmsg || data.error_msg}`);
+    }
+    console.log(`[Tieba] 昵称修改成功: ${name}`);
+  }
+
+  /** 更新 token */
+  updateToken(newToken: string): void {
+    this.token = newToken;
+    console.log('[Tieba] Token updated');
   }
 
   // ============ 内部方法 ============
 
+  /** 从楼层内容数组中提取纯文本 */
+  private extractText(content?: Array<{ type: number | string; text: string }>): string {
+    if (!content || !Array.isArray(content)) return '';
+    return content.map(c => c.text || '').join('');
+  }
+
   /** GET 请求 */
-  private async apiGet<T = any>(path: string, params: Record<string, string> = {}): Promise<T> {
+  private async apiGet(path: string, params: Record<string, string> = {}): Promise<any> {
     const url = new URL(path, this.baseUrl);
     for (const [k, v] of Object.entries(params)) {
       url.searchParams.set(k, v);
@@ -310,14 +293,19 @@ export class TiebaAdapter extends PlatformAdapter {
     });
 
     if (!res.ok) {
+      if (res.status === 429) {
+        const body = (await res.json().catch(() => ({}))) as Record<string, any>;
+        const retryAfter = body.retry_after_seconds || 10;
+        throw new Error(`Tieba API 限频: 请 ${retryAfter}s 后重试`);
+      }
       throw new Error(`Tieba API GET ${path} failed: HTTP ${res.status}`);
     }
 
-    return res.json() as Promise<T>;
+    return res.json();
   }
 
   /** POST 请求 */
-  private async apiPost<T = any>(path: string, body: Record<string, any>): Promise<T> {
+  private async apiPost(path: string, body: Record<string, any>): Promise<any> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: {
@@ -328,33 +316,33 @@ export class TiebaAdapter extends PlatformAdapter {
     });
 
     if (!res.ok) {
+      if (res.status === 429) {
+        const rBody = (await res.json().catch(() => ({}))) as Record<string, any>;
+        const retryAfter = rBody.retry_after_seconds || 10;
+        throw new Error(`Tieba API 限频: 请 ${retryAfter}s 后重试`);
+      }
       throw new Error(`Tieba API POST ${path} failed: HTTP ${res.status}`);
     }
 
-    return res.json() as Promise<T>;
+    return res.json();
   }
 
-  /** 启动回复轮询 */
+  // ============ 轮询和心跳 ============
+
   private startPolling(): void {
     this.pollTimer = setInterval(async () => {
-      try {
-        await this.pollReplies();
-      } catch (e) {
-        console.error('[Tieba] Poll error:', (e as Error).message);
-      }
+      try { await this.pollReplies(); }
+      catch (e) { console.error('[Tieba] Poll error:', (e as Error).message); }
     }, this.pollIntervalMs);
 
-    // 启动时立即执行一次
     this.pollReplies().catch(e => {
       console.error('[Tieba] Initial poll error:', (e as Error).message);
     });
   }
 
-  /** 轮询回复 */
   private async pollReplies(): Promise<void> {
     const replies = await this.getReplyMe();
     const unread = replies.filter(r => r.unread === 1);
-
     if (unread.length === 0) return;
 
     console.log(`[Tieba] ${unread.length} unread replies`);
@@ -363,17 +351,18 @@ export class TiebaAdapter extends PlatformAdapter {
       if (!this.messageCallback) break;
 
       const msg: IncomingMessage = {
-        sessionId: this.formatSessionId('tieba', reply.author?.id || 'unknown'),
+        sessionId: `tieba:${reply.post_id}`,
         content: reply.content,
         sender: {
-          id: reply.author?.id || '',
-          name: reply.author?.name || 'unknown',
+          id: '',
+          name: 'tieba-user',
           isBot: true,
         },
-        replyTo: reply.post_id,
+        replyTo: String(reply.post_id),
         metadata: {
           threadId: reply.thread_id,
           postId: reply.post_id,
+          title: reply.title,
           quoteContent: reply.quote_content,
           platform: 'tieba',
         },
@@ -387,14 +376,10 @@ export class TiebaAdapter extends PlatformAdapter {
     }
   }
 
-  /** 启动心跳 */
   private startHeartbeat(): void {
     this.heartbeatTimer = setInterval(async () => {
-      try {
-        await this.runHeartbeat();
-      } catch (e) {
-        console.error('[Tieba] Heartbeat error:', (e as Error).message);
-      }
+      try { await this.runHeartbeat(); }
+      catch (e) { console.error('[Tieba] Heartbeat error:', (e as Error).message); }
     }, this.heartbeatIntervalMs);
 
     console.log(`[Tieba] Heartbeat every ${this.heartbeatIntervalMs / 1000}s`);
@@ -402,9 +387,8 @@ export class TiebaAdapter extends PlatformAdapter {
 
   /**
    * 心跳流程：
-   * 1. 检查未读回复 → 交给 messageCallback（engine 处理回复）
-   * 2. 浏览帖子列表 → 点赞 + 评论
-   * 3. 发布新帖（可选）
+   * 1. 检查未读回复 → 交给 messageCallback
+   * 2. 浏览热帖 → 点赞互动
    */
   private async runHeartbeat(): Promise<void> {
     console.log('[Tieba] Heartbeat start');
@@ -412,27 +396,27 @@ export class TiebaAdapter extends PlatformAdapter {
     // 1. 处理未读回复
     await this.pollReplies();
 
-    // 2. 浏览帖子列表并互动
+    // 2. 浏览热帖并点赞
     const threads = await this.getThreadList('hot');
     let liked = 0;
-    let commented = 0;
 
     for (const thread of threads.slice(0, 5)) {
       try {
         // 点赞主帖
-        if (thread.thread_id) {
-          await this.agree(thread.thread_id, 3);
-          liked++;
+        if (thread.id && thread.agree_num >= 0) {
+          const ok = await this.agree(thread.id, 3);
+          if (ok) liked++;
         }
 
-        // 浏览详情，给好的楼层点赞
-        if (thread.thread_id && liked < 3) {
-          const detail = await this.getThreadDetail(thread.thread_id);
-          for (const floor of (detail.post_list || []).slice(0, 3)) {
-            if (floor.agree_num && floor.agree_num > 0) {
-              await this.agree(thread.thread_id, 1, floor.post_id);
-              liked++;
-              if (liked >= 3) break;
+        // 浏览详情，给优质楼层点赞
+        if (thread.id && liked < 5) {
+          const detail = await this.getThreadDetail(thread.id);
+          for (const floor of (detail.post_list || []).slice(0, 5)) {
+            const agreeNum = floor.agree?.agree_num || 0;
+            if (agreeNum > 5) {
+              const ok = await this.agree(thread.id, 1, floor.id);
+              if (ok) liked++;
+              if (liked >= 5) break;
             }
           }
         }
@@ -441,12 +425,6 @@ export class TiebaAdapter extends PlatformAdapter {
       }
     }
 
-    console.log(`[Tieba] Heartbeat done: liked=${liked} commented=${commented}`);
-  }
-
-  /** 更新 token（用于 token 刷新） */
-  updateToken(newToken: string): void {
-    this.token = newToken;
-    console.log('[Tieba] Token updated');
+    console.log(`[Tieba] Heartbeat done: liked=${liked}`);
   }
 }
