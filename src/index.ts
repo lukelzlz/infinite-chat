@@ -1,7 +1,9 @@
 import { ChatBotEngine } from './core/engine';
 import { TelegramAdapter } from './adapters/telegram';
-import { MisskeyAdapter } from './adapters/misskey';
+import { DiscordAdapter } from './adapters/discord';
 import { FeishuAdapter } from './adapters/feishu';
+import { MisskeyAdapter } from './adapters/misskey';
+import { TiebaAdapter } from './adapters/tieba';
 import { FrameworkConfig } from './core/types';
 import yaml from 'yaml';
 import fs from 'fs';
@@ -14,6 +16,7 @@ export { TelegramAdapter } from './adapters/telegram';
 export { DiscordAdapter } from './adapters/discord';
 export { FeishuAdapter } from './adapters/feishu';
 export { MisskeyAdapter } from './adapters/misskey';
+export { TiebaAdapter } from './adapters/tieba';
 export { WebAdapter } from './adapters/web';
 export { LLMProvider, OpenAIProvider, AnthropicProvider, LocalModelProvider } from './llm';
 export { Plugin, PluginManager, EchoPlugin, HelpPlugin, StatsPlugin } from './plugins';
@@ -71,6 +74,15 @@ export async function createEngineFromConfig(configPath: string): Promise<ChatBo
       case 'telegram':
         engine.registerAdapter(new TelegramAdapter(adapterConfig.config.token));
         break;
+      case 'discord':
+        engine.registerAdapter(new DiscordAdapter(adapterConfig.config.token));
+        break;
+      case 'feishu':
+        engine.registerAdapter(new FeishuAdapter({
+          appId: adapterConfig.config.appId,
+          appSecret: adapterConfig.config.appSecret,
+        }));
+        break;
       case 'misskey':
         engine.registerAdapter(new MisskeyAdapter({
           instanceUrl: adapterConfig.config.instanceUrl,
@@ -89,7 +101,13 @@ export async function createEngineFromConfig(configPath: string): Promise<ChatBo
           port: adapterConfig.config.port || 3000,
         }));
         break;
-      // 添加更多适配器...
+      case 'tieba':
+        engine.registerAdapter(new TiebaAdapter({
+          token: adapterConfig.config.token,
+          heartbeatIntervalMs: adapterConfig.config.heartbeatIntervalMs,
+          pollIntervalMs: adapterConfig.config.pollIntervalMs,
+        }));
+        break;
     }
   }
 

@@ -4,3 +4,5 @@ export { DiscordAdapter } from './discord';
 export { FeishuAdapter } from './feishu';
 export { MisskeyAdapter } from './misskey';
 export { WebAdapter } from './web';
+export { TiebaAdapter } from './tieba';
+export type { TiebaAdapterConfig } from './tieba';

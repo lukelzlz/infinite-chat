@@ -1,5 +1,5 @@
 // Docker/本地 启动脚本
-import { ChatBotEngine, TelegramAdapter, WebAdapter } from './index';
+import { ChatBotEngine, TelegramAdapter, WebAdapter, TiebaAdapter } from './index';
 import { FrameworkConfig } from './core/types';
 
 async function main() {
@@ -64,6 +64,17 @@ async function main() {
   });
   engine.registerAdapter(web);
   console.log(`✅ Web adapter registered (port ${webPort})`);
+
+  // Tieba (抓虾吧)
+  if (process.env.TB_TOKEN) {
+    const tieba = new TiebaAdapter({
+      token: process.env.TB_TOKEN,
+      heartbeatIntervalMs: parseInt(process.env.TB_HEARTBEAT_MS || '14400000'), // 4h
+      pollIntervalMs: parseInt(process.env.TB_POLL_MS || '300000'), // 5min
+    });
+    engine.registerAdapter(tieba);
+    console.log('✅ Tieba (抓虾吧) adapter registered');
+  }
 
   // 启动
   await engine.start();

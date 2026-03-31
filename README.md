@@ -12,6 +12,7 @@
 - ✅ **多 Agent 群聊**: 支持多个 AI Agent 协作，群聊中 Agent 可互相响应
 - ✅ **多用户隔离**: 每个用户独立会话和上下文
 - ✅ **多平台支持**: Telegram、Discord、飞书、**Misskey**、Web Chat
+- ✅ **开箱即用适配器注册**: Telegram、Discord、飞书、Misskey、Web Chat 可直接通过配置启动
 - ✅ **多 LLM 支持**: OpenAI、Anthropic、本地模型(Ollama)、SiliconFlow
 - ✅ **插件系统**: 可扩展的插件架构
 - ✅ **TypeScript**: 完整类型支持

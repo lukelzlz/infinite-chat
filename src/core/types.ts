@@ -135,7 +135,7 @@ export interface MemoryConfig {
 
 /** 适配器配置 */
 export interface AdapterConfig {
-  type: 'telegram' | 'discord' | 'feishu' | 'misskey' | 'web';
+  type: 'telegram' | 'discord' | 'feishu' | 'misskey' | 'web' | 'tieba';
   enabled: boolean;
   config: Record<string, any>;
 }
