@@ -299,7 +299,8 @@ export class ChatBotEngine {
             0
           );
         } else {
-          await adapter.sendMessage(sessionId, response);
+          const sess = this.sessions.get(sessionId);
+          await adapter.sendMessage(sessionId, response, sess?.metadata as any);
         }
       }
 
@@ -331,7 +332,9 @@ export class ChatBotEngine {
     chainCount: number
   ): Promise<void> {
     // 发送当前回复
-    await adapter.sendMessage(sessionId, response);
+    // Pass session metadata to adapter for platform-specific routing (e.g., tieba thread_id)
+    const session = this.sessions.get(sessionId);
+    await adapter.sendMessage(sessionId, response, session?.metadata as any);
 
     // 检查是否需要链式回复
     if (!this.agentManager || !lastAgentId) return;

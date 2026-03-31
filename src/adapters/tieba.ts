@@ -130,15 +130,24 @@ export class TiebaAdapter extends PlatformAdapter {
     post_id?: number;
     title?: string;
     tab_id?: number;
+    threadId?: number;
+    postId?: number;
+    platform?: string;
   }): Promise<void> {
+    // Normalize camelCase metadata keys to snake_case options
+    const threadId = options?.thread_id || options?.threadId;
+    const postId = options?.post_id || options?.postId;
+
     if (options?.title) {
       await this.createThread(options.title, message, options.tab_id);
-    } else if (options?.post_id) {
-      await this.replyToPost(message, options.post_id);
-    } else if (options?.thread_id) {
-      await this.replyToThread(message, options.thread_id);
+    } else if (postId) {
+      await this.replyToPost(message, Number(postId));
+    } else if (threadId) {
+      await this.replyToThread(message, Number(threadId));
     } else {
-      await this.createThread('消息', message);
+      // No thread context — create a new thread instead of erroring
+      console.log('[Tieba] sendMessage: no thread/post context, creating new thread');
+      await this.createThread('闲聊', message);
     }
   }
 
@@ -396,35 +405,63 @@ export class TiebaAdapter extends PlatformAdapter {
     // 1. 处理未读回复
     await this.pollReplies();
 
-    // 2. 浏览热帖并点赞
-    const threads = await this.getThreadList('hot');
+    // 2. 浏览热帖并互动
+    const threads = await this.getThreadList('time');
     let liked = 0;
+    let commented = 0;
 
-    for (const thread of threads.slice(0, 5)) {
+    for (const thread of threads.slice(0, 8)) {
       try {
-        // 点赞主帖
+        // 点赞
         if (thread.id && thread.agree_num >= 0) {
           const ok = await this.agree(thread.id, 3);
           if (ok) liked++;
         }
 
-        // 浏览详情，给优质楼层点赞
-        if (thread.id && liked < 5) {
+        // 评论（最多评论 2 个帖子，避免刷屏）
+        if (thread.id && commented < 2 && this.messageCallback) {
           const detail = await this.getThreadDetail(thread.id);
-          for (const floor of (detail.post_list || []).slice(0, 5)) {
-            const agreeNum = floor.agree?.agree_num || 0;
-            if (agreeNum > 5) {
-              const ok = await this.agree(thread.id, 1, floor.id);
-              if (ok) liked++;
-              if (liked >= 5) break;
+          const firstFloor = detail.first_floor;
+          if (firstFloor?.content) {
+            const postText = firstFloor.content
+              .map((c: any) => c.text || '')
+              .join('')
+              .slice(0, 300);
+
+            if (postText.length > 20) {
+              // 把帖子内容作为消息喂给 engine，让 LLM 生成评论
+              const msg: IncomingMessage = {
+                sessionId: `tieba:thread-${thread.id}`,
+                content: `我在贴吧看到一个帖子「${thread.title || ''}」:
+${postText}
+
+请用轻松友好的语气写一个简短评论（50字以内，不要用markdown，不要用emoji，用颜文字），直接输出评论内容，不要加前缀:`,
+                sender: { id: 'system', name: 'tieba-heartbeat', isBot: true },
+                metadata: {
+                  threadId: thread.id,
+                  postId: firstFloor.id,
+                  title: thread.title,
+                  platform: 'tieba',
+                  autoComment: true,
+                },
+              };
+
+              try {
+                await this.messageCallback(msg);
+                commented++;
+                // 间隔 3 秒避免频率过高
+                await new Promise(r => setTimeout(r, 3000));
+              } catch (e) {
+                console.error('[Tieba] Auto-comment error:', (e as Error).message);
+              }
             }
           }
         }
       } catch (e) {
-        // 继续处理下一个帖子
+        // continue
       }
     }
 
-    console.log(`[Tieba] Heartbeat done: liked=${liked}`);
+    console.log(`[Tieba] Heartbeat done: liked=${liked} commented=${commented}`);
   }
 }
