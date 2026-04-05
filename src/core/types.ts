@@ -4,12 +4,20 @@
 export interface Message {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | null;
   timestamp: number;
   metadata?: Record<string, any>;
   /** Agent 标识（多 Agent 场景） */
   agentId?: string;
+  /** 工具调用信息（assistant role 且有工具调用时） */
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+  /** 关联的工具调用 ID（tool role 消息） */
+  tool_call_id?: string;
 }
 
 /** 会话结构 */
@@ -182,4 +190,16 @@ export interface ConfigChangeEvent {
   oldConfig: Partial<FrameworkConfig>;
   newConfig: Partial<FrameworkConfig>;
   timestamp: number;
+}
+
+/** 记忆管理器接口（RAGMemoryManager / HybridMemoryManager 共用） */
+export interface IMemoryManager {
+  buildContext(
+    messages: Message[],
+    userId: string,
+    currentQuery: string
+  ): Promise<{
+    systemPrompt: string;
+    memories?: Array<{ id: string; content: string; userId: string; metadata?: Record<string, any>; score?: number }>;
+  }>;
 }

@@ -188,7 +188,7 @@ export class Mem0Manager {
   private addMemoryLocal(messages: Message[], userId: string, metadata?: Record<string, any>): void {
     if (!this.localStore.has(userId)) this.localStore.set(userId, []);
 
-    const userMessages = messages.filter(m => m.role === 'user');
+    const userMessages = messages.filter((m): m is Message & { content: string } => m.role === 'user' && m.content != null);
     for (const msg of userMessages) {
       if (this.isImportantInfo(msg.content)) {
         const existing = this.localStore.get(userId)!;

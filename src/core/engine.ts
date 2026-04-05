@@ -1,6 +1,13 @@
+// ============ 聊天机器人引擎 ============
+//
+// 修改原因：
+// - 任务1：注入 LLMProvider 到 ContextManager，实现真正的上下文压缩
+// - 任务2：executeToolCalls 从串行 for 循环改为 Promise.allSettled 并行执行
+// - 任务3：集成 SessionPersistManager，启动时恢复/停止时保存会话状态
+
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { FrameworkConfig, Message, IncomingMessage, Session } from './types';
+import { FrameworkConfig, Message, IncomingMessage, Session, IMemoryManager } from './types';
 import { ContextManager } from './context';
 // RAGMemoryManager replaces HybridMemoryManager
 import { AgentManager } from './agents';
@@ -12,6 +19,7 @@ import { PermissionManager, getPermissionManager } from '../permission';
 import { generateSecureId, validateUrl } from '../utils/security';
 import { RAGService, getRAGService } from '../rag';
 import { MemoryManager, initMemoryManager } from './memory-manager';
+import { SessionPersistManager } from './session-persist';
 
 /**
  * 聊天机器人引擎
@@ -21,7 +29,8 @@ export class ChatBotEngine {
   private adapters: Map<string, PlatformAdapter> = new Map();
   private llmProvider!: LLMProvider;
   private contextManager: ContextManager;
-  private memoryManager: any; // RAGMemoryManager
+  /** 记忆管理器（RAGMemoryManager 或 HybridMemoryManager，修复审查问题 #E1） */
+  private memoryManager: IMemoryManager;
   private agentManager?: AgentManager;
   private pluginManager: PluginManager;
   private permissionManager: PermissionManager;
@@ -29,6 +38,14 @@ export class ChatBotEngine {
   private isRunning = false;
   private tools: Map<string, RegisteredTool> = new Map();
   private memManager: MemoryManager;
+  /** 已点赞的帖子 ID 集合（用于持久化） */
+  private likedThreads: Set<string> = new Set();
+  /** 最后发帖时间戳（key: sessionId, value: timestamp） */
+  private lastPostAt: Map<string, number> = new Map();
+  /** 会话状态持久化管理器 */
+  private persistManager: SessionPersistManager;
+  /** 会话级并发锁（修复审查问题 #E6：防止同一 sessionId 并行处理） */
+  private sessionLocks: Map<string, Promise<void>> = new Map();
 
   constructor(config: FrameworkConfig) {
     this.config = config;
@@ -75,6 +92,9 @@ export class ChatBotEngine {
       sessionTimeout: 24 * 60 * 60 * 1000, // 24 小时
       cleanupInterval: 5 * 60 * 1000, // 5 分钟
     });
+
+    // 初始化会话持久化管理器
+    this.persistManager = new SessionPersistManager();
   }
 
   /**
@@ -84,6 +104,13 @@ export class ChatBotEngine {
     // 初始化 LLM
     this.llmProvider = createLLMProvider(this.config.llm);
     console.log(`[Engine] LLM initialized: ${this.config.llm.provider}/${this.config.llm.model}`);
+
+    // 注入 LLM Provider 到 ContextManager（启用真正的上下文压缩）
+    this.contextManager.setLLMProvider(this.llmProvider, {
+      maxSummaryTokens: 1024,
+      temperature: 0.3,
+    });
+    console.log('[Engine] LLM context compression enabled');
 
     // 加载插件
     if (this.config.plugins?.enabled) {
@@ -119,6 +146,9 @@ export class ChatBotEngine {
 
     await this.init();
 
+    // 从持久化文件恢复会话状态
+    await this.restorePersistedState();
+
     // 启动所有适配器
     for (const [name, adapter] of this.adapters) {
       try {
@@ -137,6 +167,11 @@ export class ChatBotEngine {
       (sessionId) => this.clearSession(sessionId)
     );
 
+    // 启动会话自动保存（修复审查问题 #E4：传入真正的脏检查函数）
+    this.persistManager.startAutoSave(() => {
+      return this.persistManager.isDirty();
+    });
+
     this.isRunning = true;
     console.log('[Engine] Started');
   }
@@ -145,6 +180,15 @@ export class ChatBotEngine {
    * 停止引擎
    */
   async stop(): Promise<void> {
+    // 停止自动保存并强制保存一次当前状态
+    this.persistManager.stopAutoSave();
+    await this.persistManager.snapshotAndSave(
+      this.sessions,
+      this.likedThreads,
+      this.lastPostAt,
+      this.contextManager.getAllSummaries()
+    );
+
     // 停止内存管理器清理
     this.memManager.stopCleanup();
 
@@ -162,11 +206,26 @@ export class ChatBotEngine {
 
   /**
    * 处理入站消息
+   * 修复审查问题 #E6：同一 sessionId 的消息串行处理，防止并发竞态
    */
   private async handleIncomingMessage(incoming: IncomingMessage): Promise<void> {
-    const { sessionId, content, sender, attachments } = incoming;
+    const { sessionId } = incoming;
 
-    const logPreview = content || `[附件: ${attachments?.length || 0} 个]`;
+    // 获取会话级锁：如果已有正在处理的同会话消息，等待其完成
+    const existingLock = this.sessionLocks.get(sessionId);
+    if (existingLock) {
+      await existingLock;
+    }
+
+    // 创建新的锁 Promise
+    let resolveLock: () => void;
+    const lockPromise = new Promise<void>(resolve => { resolveLock = resolve; });
+    this.sessionLocks.set(sessionId, lockPromise);
+
+    try {
+      const { content, sender, attachments } = incoming;
+
+      const logPreview = content || `[附件: ${attachments?.length || 0} 个]`;
     console.log(`[Engine] Message from ${sessionId}: ${logPreview.slice(0, 50)}...`);
 
     try {
@@ -216,7 +275,7 @@ export class ChatBotEngine {
 
       // 发送 typing 状态
       if (adapter && 'sendTyping' in adapter) {
-        (adapter as any).sendTyping(sessionId).catch(() => {});
+        (adapter as PlatformAdapter & { sendTyping(sid: string): Promise<void> }).sendTyping(sessionId).catch(() => {});
       }
 
       // 检查是否是插件命令
@@ -262,9 +321,14 @@ export class ChatBotEngine {
         systemPrompt = memContext.systemPrompt;
       }
 
-      // RAG: 检索知识库相关内容
+      // RAG: 检索知识库相关内容（修复审查问题 #E7：加 try-catch 防止阻断消息管线）
       const rag = getRAGService();
-      const ragResults = rag.searchSync(content, 3);
+      let ragResults: Array<{ content: string; source: string; score: number }> = [];
+      try {
+        ragResults = rag.searchSync(content, 3);
+      } catch (ragError) {
+        console.warn(`[Engine] RAG search failed, skipping: ${ragError instanceof Error ? ragError.message : ragError}`);
+      }
       if (ragResults.length > 0) {
         const ragContext = ragResults
           .map((r, i) => `【参考资料${i + 1}】(来源: ${r.source}, 相关度: ${(r.score * 100).toFixed(0)}%)\n${r.content}`)
@@ -278,7 +342,6 @@ export class ChatBotEngine {
       const toolDefs = this.getToolDefinitions();
       let llmResult: LLMChatResult;
       let maxToolRounds = 5; // 最多5轮工具调用
-      const toolMessages: any[] = []; // tool role messages
 
       do {
         llmResult = await llmProvider.chat(messages, {
@@ -295,22 +358,28 @@ export class ChatBotEngine {
         const toolResults = await this.executeToolCalls(llmResult.toolCalls);
 
         // 把 assistant 的 tool_calls 和 tool results 加入 messages
-        // (用 any 绕过 Message 类型检查，因为 tool role 不在原始类型里)
-        (messages as any[]).push({
+        // 修复审查问题 #E3：Message 类型已扩展支持 tool role，无需 as any
+        messages.push({
+          id: uuidv4(),
+          sessionId,
           role: 'assistant',
           content: llmResult.content || null,
+          timestamp: Date.now(),
           tool_calls: llmResult.toolCalls.map(tc => ({
             id: tc.id,
-            type: 'function',
+            type: 'function' as const,
             function: { name: tc.name, arguments: tc.arguments },
           })),
         });
 
         for (const tr of toolResults) {
-          (messages as any[]).push({
+          messages.push({
+            id: uuidv4(),
+            sessionId,
             role: 'tool',
-            tool_call_id: tr.toolCallId,
             content: tr.result,
+            timestamp: Date.now(),
+            tool_call_id: tr.toolCallId,
           });
         }
 
@@ -339,7 +408,7 @@ export class ChatBotEngine {
           );
         } else {
           const sess = this.sessions.get(sessionId);
-          await adapter.sendMessage(sessionId, response, sess?.metadata as any);
+          await adapter.sendMessage(sessionId, response, sess?.metadata);
         }
       }
 
@@ -352,17 +421,27 @@ export class ChatBotEngine {
       const errorAdapter = this.adapters.get(sessionId.split(':')[0]);
       if (errorAdapter) {
         try {
-          await errorAdapter.sendMessage(sessionId, `抱歉，处理消息时出错: ${e?.message || '未知错误'}`);
+          // 修复审查问题 #E5：不向用户暴露内部错误详情（可能含 API Key 等敏感信息）
+          await errorAdapter.sendMessage(sessionId, '抱歉，处理消息时出错了，请稍后重试');
         } catch (sendError) {
           console.error(`[Engine] Failed to send error message:`, sendError);
         }
       }
-    }
+    } // end inner try-catch (message processing)
+    } finally {
+      // 释放会话级锁（修复审查问题 #E6）
+      this.sessionLocks.delete(sessionId);
+      resolveLock!();
+    } // end outer try-finally (lock acquisition)
   }
+
 
   /**
    * 发送消息并可能触发链式 Agent 回复
+   * 修复审查问题 #I7：增加 maxChainDepth 防止无限递归
    */
+  private static readonly MAX_CHAIN_DEPTH = 10;
+
   private async sendMessageWithPossibleChain(
     adapter: PlatformAdapter,
     sessionId: string,
@@ -373,10 +452,16 @@ export class ChatBotEngine {
     // 发送当前回复
     // Pass session metadata to adapter for platform-specific routing (e.g., tieba thread_id)
     const session = this.sessions.get(sessionId);
-    await adapter.sendMessage(sessionId, response, session?.metadata as any);
+    await adapter.sendMessage(sessionId, response, session?.metadata);
 
     // 检查是否需要链式回复
     if (!this.agentManager || !lastAgentId) return;
+
+    // 修复审查问题 #I7：超过最大递归深度时停止
+    if (chainCount >= ChatBotEngine.MAX_CHAIN_DEPTH) {
+      console.warn(`[Engine] Chain depth ${chainCount} reached max (${ChatBotEngine.MAX_CHAIN_DEPTH}), stopping recursion`);
+      return;
+    }
 
     const { shouldChain, nextAgent } = this.agentManager.shouldChainAgent(
       lastAgentId,
@@ -456,7 +541,7 @@ export class ChatBotEngine {
         let content: string;
         
         if (session.platform === 'telegram' && adapter && 'downloadFile' in adapter) {
-          const fileData = await (adapter as any).downloadFile(attachment.fileId);
+          const fileData = await (adapter as PlatformAdapter & { downloadFile(fileId: string): Promise<{ content: Buffer }> }).downloadFile(attachment.fileId);
           content = fileData.content.toString('utf-8');
         } else if (session.platform === 'discord' && attachment.url) {
           // Discord 文件通过 URL 下载 - 验证 URL 防止 SSRF
@@ -546,6 +631,70 @@ export class ChatBotEngine {
   }
 
   /**
+   * 从持久化文件恢复会话状态
+   *
+   * 恢复内容：
+   * - sessions Map（会话基本信息）
+   * - likedThreads Set（已点赞列表）
+   * - lastPostAt Map（最后发帖时间）
+   * - ContextManager summaries（压缩摘要链）
+   */
+  private async restorePersistedState(): Promise<void> {
+    try {
+      const state = await this.persistManager.load();
+
+      // 恢复会话
+      for (const session of state.sessions) {
+        this.sessions.set(session.id, session);
+      }
+
+      // 恢复点赞集合
+      this.likedThreads = new Set(state.likedThreads);
+
+      // 恢复发帖时间
+      this.lastPostAt = new Map(Object.entries(state.lastPostAt));
+
+      // 恢复摘要链到 ContextManager
+      if (Object.keys(state.summaries).length > 0) {
+        this.contextManager.restoreSummaries(state.summaries);
+      }
+
+      console.log(`[Session] 状态恢复完成: ${this.sessions.size} 个会话, ` +
+                  `${this.likedThreads.size} 个点赞, ${this.lastPostAt.size} 个发帖记录`);
+    } catch (e: any) {
+      console.error(`[Session] 状态恢复失败，将使用空状态启动: ${e.message}`);
+    }
+  }
+
+  /**
+   * 获取已点赞的帖子集合（供外部/适配器使用）
+   */
+  getLikedThreads(): Set<string> {
+    return this.likedThreads;
+  }
+
+  /**
+   * 标记帖子为已点赞
+   */
+  markThreadLiked(threadId: string): void {
+    this.likedThreads.add(threadId);
+  }
+
+  /**
+   * 更新最后发帖时间
+   */
+  updateLastPostAt(sessionId: string): void {
+    this.lastPostAt.set(sessionId, Date.now());
+  }
+
+  /**
+   * 获取最后发帖时间
+   */
+  getLastPostAt(sessionId: string): number | undefined {
+    return this.lastPostAt.get(sessionId);
+  }
+
+  /**
    * 手动发送消息（用于主动推送）
    */
   async sendMessage(sessionId: string, message: string): Promise<void> {
@@ -612,28 +761,51 @@ export class ChatBotEngine {
     return Array.from(this.tools.values()).map(t => t.definition);
   }
 
-  /** 执行工具调用 */
+  /**
+   * 并行执行工具调用
+   *
+   * 使用 Promise.allSettled 并行执行所有工具调用：
+   * - 独立工具（如浏览+点赞）同时执行，提升速度
+   * - 单个工具失败不影响其他工具
+   * - 结果保持与输入相同的顺序
+   */
   private async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolResult[]> {
-    const results: ToolResult[] = [];
-    for (const tc of toolCalls) {
-      const tool = this.tools.get(tc.name);
-      if (!tool) {
-        results.push({ toolCallId: tc.id, success: false, result: `Unknown tool: ${tc.name}` });
-        continue;
-      }
-      try {
+    if (toolCalls.length === 0) return [];
+
+    // 并行发起所有工具调用，用 allSettled 保证单个失败不影响其他
+    const settledResults = await Promise.allSettled(
+      toolCalls.map(async (tc): Promise<ToolResult> => {
+        const tool = this.tools.get(tc.name);
+        if (!tool) {
+          return { toolCallId: tc.id, success: false, result: `Unknown tool: ${tc.name}` };
+        }
+
         let args: Record<string, any> = {};
         try { args = JSON.parse(tc.arguments); } catch { args = {}; }
-        console.log(`[Engine] Tool call: ${tc.name}(${JSON.stringify(args).slice(0, 100)})`);
+
+        // 修复审查问题 #I5：只记录工具名和参数类型/长度，不打印具体值（防止泄露密码/token）
+        const argKeys = Object.keys(args).join(', ');
+        console.log(`[Engine] Tool call: ${tc.name}(${argKeys})`);
         const result = await tool.executor(args);
         console.log(`[Engine] Tool result: ${result.slice(0, 100)}`);
-        results.push({ toolCallId: tc.id, success: true, result });
-      } catch (e: any) {
-        console.error(`[Engine] Tool error: ${tc.name}`, e.message);
-        results.push({ toolCallId: tc.id, success: false, result: `Error: ${e.message}` });
+        return { toolCallId: tc.id, success: true, result };
+      })
+    );
+
+    // 将 settled 结果映射回原始顺序的 ToolResult 数组
+    return settledResults.map((settled, index) => {
+      if (settled.status === 'fulfilled') {
+        return settled.value;
       }
-    }
-    return results;
+      // rejected：记录错误但不影响其他结果
+      const tc = toolCalls[index];
+      console.error(`[Engine] Tool error: ${tc?.name}`, settled.reason instanceof Error ? settled.reason.message : String(settled.reason));
+      return {
+        toolCallId: tc?.id || 'unknown',
+        success: false,
+        result: `Error: ${settled.reason instanceof Error ? settled.reason.message : 'Unknown error'}`,
+      };
+    });
   }
 
   /**
